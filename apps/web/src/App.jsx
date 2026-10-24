@@ -318,7 +318,11 @@ export default function App() {
   if (route.page === "landing") {
     return (
       <Screen>
-        <Landing onGetStarted={() => navigate("dashboard")} />
+        <Landing
+          onGetStarted={() => navigate("dashboard")}
+          darkMode={darkMode}
+          onToggleTheme={() => updateDarkMode((current) => !current)}
+        />
       </Screen>
     );
   }
