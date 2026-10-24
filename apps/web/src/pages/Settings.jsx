@@ -1,76 +1,72 @@
-import { useState, useEffect } from "react";
-import { sendNativeTransfer } from "../services/blockchain.js";
+import { useCallback, useEffect, useState } from "react";
+import { ethers } from "ethers";
 import { apiRequest } from "../services/api.js";
+import { ensureArcTestnet, getNativeBalance } from "../services/blockchain.js";
+import {
+  Button,
+  Alert,
+  CopyButton,
+  formatAmount,
+  shortAddress,
+  addressUrl,
+  txUrl,
+  friendlyError
+} from "../components/ui.jsx";
+import { PageScope, Field, EmptyState } from "../components/forms.jsx";
 
-export default function Settings({
-  merchant,
-  darkMode,
-  setDarkMode
-}) {
-  const [copied, setCopied] = useState(false);
+// Arc's native USDC uses 18 decimals for transaction values (same as the checkout flow).
+const NATIVE_DECIMALS = 18;
+const AMOUNT_PATTERN = /^\d+(\.\d{1,6})?$/;
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
+function formatDate(value) {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+const sectionTitle = { marginBottom: 4 };
+
+export default function Settings({ merchant, darkMode = false, setDarkMode }) {
+  const walletAddress = merchant?.wallet_address;
+
+  // Withdrawal
+  const [balance, setBalance] = useState(null);
   const [withdrawTo, setWithdrawTo] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
-  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawStep, setWithdrawStep] = useState("form"); // form | review | sending
   const [withdrawError, setWithdrawError] = useState("");
-  const [withdrawSuccess, setWithdrawSuccess] = useState("");
+  const [withdrawal, setWithdrawal] = useState(null); // { hash, to, amount, status }
 
+  // API keys
   const [apiKeys, setApiKeys] = useState([]);
   const [loadingKeys, setLoadingKeys] = useState(false);
   const [keyName, setKeyName] = useState("");
   const [creatingKey, setCreatingKey] = useState(false);
   const [newRawKey, setNewRawKey] = useState("");
   const [keyError, setKeyError] = useState("");
+  const [confirmRevokeId, setConfirmRevokeId] = useState(null);
+  const [revokingId, setRevokingId] = useState(null);
 
-  const theme = darkMode
-    ? {
-        background: "#0a0e1a",
-        card: "#111827",
-        text: "#f8fafc",
-        muted: "#94a3b8",
-        border: "#263244",
-        primary: "#3b82f6",
-        green: "#10b981",
-        greenSoft: "rgba(16, 185, 129, 0.12)"
-      }
-    : {
-        background: "#f8fafc",
-        card: "#ffffff",
-        text: "#0f172a",
-        muted: "#64748b",
-        border: "#e2e8f0",
-        primary: "#2563eb",
-        green: "#059669",
-        greenSoft: "rgba(5, 150, 105, 0.08)"
-      };
-
-  function shortenAddress(address) {
-    if (!address) return "Not connected";
-
-    return `${address.slice(0, 8)}...${address.slice(-6)}`;
-  }
-
-  async function copyWalletAddress() {
-    if (!merchant?.wallet_address) return;
+  const loadBalance = useCallback(async () => {
+    if (!walletAddress) return;
 
     try {
-      await navigator.clipboard.writeText(
-        merchant.wallet_address
-      );
-
-      setCopied(true);
-
-      setTimeout(() => {
-        setCopied(false);
-      }, 2000);
+      setBalance(await getNativeBalance(walletAddress));
     } catch {
-      setCopied(false);
+      setBalance(null);
     }
-  }
+  }, [walletAddress]);
 
-  async function loadApiKeys() {
-    if (!merchant) return;
-
+  const loadApiKeys = useCallback(async () => {
     setLoadingKeys(true);
     setKeyError("");
 
@@ -78,19 +74,25 @@ export default function Settings({
       const result = await apiRequest("/api/keys");
       setApiKeys(result.keys || []);
     } catch (err) {
-      setKeyError(err.message || "Unable to load API keys.");
+      setKeyError(friendlyError(err));
     } finally {
       setLoadingKeys(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    if (merchant) {
-      loadApiKeys();
-    } else {
+    if (!merchant) {
       setApiKeys([]);
+      setBalance(null);
+      setNewRawKey("");
+      setWithdrawal(null);
+      setWithdrawStep("form");
+      return;
     }
-  }, [merchant]);
+
+    loadApiKeys();
+    loadBalance();
+  }, [merchant, loadApiKeys, loadBalance]);
 
   async function handleCreateKey(event) {
     event.preventDefault();
@@ -102,7 +104,7 @@ export default function Settings({
     try {
       const result = await apiRequest("/api/keys", {
         method: "POST",
-        body: JSON.stringify({ name: keyName })
+        body: JSON.stringify({ name: keyName.trim() })
       });
 
       setNewRawKey(result.key.rawKey);
@@ -110,877 +112,478 @@ export default function Settings({
 
       await loadApiKeys();
     } catch (err) {
-      setKeyError(err.message || "Unable to create API key.");
+      setKeyError(friendlyError(err));
     } finally {
       setCreatingKey(false);
     }
   }
 
   async function handleRevokeKey(keyId) {
+    setRevokingId(keyId);
     setKeyError("");
 
     try {
-      await apiRequest(`/api/keys/${keyId}/revoke`, {
+      await apiRequest(`/api/keys/${encodeURIComponent(keyId)}/revoke`, {
         method: "POST"
       });
 
+      setConfirmRevokeId(null);
       await loadApiKeys();
     } catch (err) {
-      setKeyError(err.message || "Unable to revoke API key.");
+      setKeyError(friendlyError(err));
+    } finally {
+      setRevokingId(null);
     }
   }
 
-  async function handleWithdraw(event) {
+  function handleReview(event) {
     event.preventDefault();
-
-    setWithdrawing(true);
     setWithdrawError("");
-    setWithdrawSuccess("");
+
+    const to = withdrawTo.trim();
+    const amount = withdrawAmount.trim();
+
+    if (!ethers.isAddress(to)) {
+      setWithdrawError("Enter a valid wallet address that starts with 0x.");
+      return;
+    }
+
+    if (to.toLowerCase() === ZERO_ADDRESS) {
+      setWithdrawError("That address can't receive funds. Money sent there is lost.");
+      return;
+    }
+
+    if (!AMOUNT_PATTERN.test(amount) || Number(amount) <= 0) {
+      setWithdrawError("Enter an amount greater than 0 with up to 6 decimal places.");
+      return;
+    }
+
+    if (balance !== null && Number(amount) > balance) {
+      setWithdrawError(
+        `That is more than your balance of ${formatAmount(balance)} USDC. Leave a little for the network fee.`
+      );
+      return;
+    }
+
+    setWithdrawTo(ethers.getAddress(to));
+    setWithdrawAmount(amount);
+    setWithdrawStep("review");
+  }
+
+  async function handleConfirmWithdraw() {
+    setWithdrawError("");
+    setWithdrawStep("sending");
 
     try {
-      const txHash = await sendNativeTransfer(
-        merchant.wallet_address,
-        withdrawTo,
-        withdrawAmount
-      );
+      if (!window.ethereum) {
+        throw new Error(
+          "No wallet found. Open PayQuick inside your wallet's browser to withdraw."
+        );
+      }
 
-      setWithdrawSuccess(`Sent! Transaction: ${txHash}`);
+      await ensureArcTestnet();
+
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+
+      if (signer.address.toLowerCase() !== walletAddress.toLowerCase()) {
+        throw new Error(
+          `Your wallet is using a different account. Switch to ${shortAddress(walletAddress)} in your wallet and try again.`
+        );
+      }
+
+      const sent = await signer.sendTransaction({
+        to: withdrawTo,
+        value: ethers.parseUnits(withdrawAmount, NATIVE_DECIMALS)
+      });
+
+      const record = {
+        hash: sent.hash,
+        to: withdrawTo,
+        amount: withdrawAmount,
+        status: "confirming"
+      };
+
+      setWithdrawal(record);
       setWithdrawTo("");
       setWithdrawAmount("");
+      setWithdrawStep("form");
+
+      const receipt = await sent.wait();
+
+      setWithdrawal({
+        ...record,
+        status: receipt && receipt.status === 1 ? "confirmed" : "failed"
+      });
+
+      loadBalance();
     } catch (err) {
-      setWithdrawError(err.message || "Withdrawal failed.");
-    } finally {
-      setWithdrawing(false);
+      setWithdrawError(friendlyError(err));
+      setWithdrawStep("review");
     }
   }
-
-  const cardStyle = {
-    background: theme.card,
-    border: `1px solid ${theme.border}`,
-    borderRadius: "16px",
-    padding: "22px",
-    boxSizing: "border-box"
-  };
 
   if (!merchant) {
     return (
-      <section
-        style={{
-          minHeight: "calc(100vh - 120px)",
-          background: theme.background,
-          color: theme.text,
-          padding: "40px 20px",
-          boxSizing: "border-box"
-        }}
-      >
-        <div
-          style={{
-            maxWidth: "560px",
-            margin: "70px auto"
-          }}
-        >
-          <div
-            style={{
-              ...cardStyle,
-              textAlign: "center",
-              padding: "50px 30px"
-            }}
-          >
-            <div
-              style={{
-                width: "64px",
-                height: "64px",
-                margin: "0 auto 20px",
-                borderRadius: "18px",
-                background: theme.primary,
-                color: "#ffffff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "28px",
-                fontWeight: "800"
-              }}
-            >
-              P
-            </div>
-
-            <h2
-              style={{
-                margin: "0 0 10px",
-                fontSize: "26px"
-              }}
-            >
-              Settings
-            </h2>
-
-            <p
-              style={{
-                margin: 0,
-                color: theme.muted,
-                lineHeight: "1.6",
-                fontSize: "14px"
-              }}
-            >
-              Connect your wallet to view and manage
-              your PayQuick settings.
-            </p>
-          </div>
-        </div>
-      </section>
+      <PageScope dark={darkMode}>
+        <EmptyState
+          title="Connect your wallet"
+          text="Connect your wallet to manage your account, withdrawals and API keys."
+        />
+      </PageScope>
     );
   }
 
+  const sending = withdrawStep === "sending";
+
   return (
-    <section
-      style={{
-        minHeight: "calc(100vh - 120px)",
-        background: theme.background,
-        color: theme.text,
-        padding: "30px 20px 50px",
-        boxSizing: "border-box"
-      }}
-    >
-      <div
-        style={{
-          maxWidth: "900px",
-          margin: "0 auto"
-        }}
-      >
-        <div
-          style={{
-            marginBottom: "28px"
-          }}
-        >
-          <p
-            style={{
-              margin: "0 0 7px",
-              color: theme.muted,
-              fontSize: "13px",
-              fontWeight: "500"
-            }}
-          >
-            Account settings
-          </p>
+    <PageScope dark={darkMode}>
+      <div className="pq-head">
+        <div>
+          <h1 className="pq-h1">Settings</h1>
+          <p className="pq-sub">Your account, withdrawals, API keys and appearance.</p>
+        </div>
+      </div>
 
-          <h1
-            style={{
-              margin: 0,
-              fontSize: "30px",
-              letterSpacing: "-0.7px"
-            }}
-          >
-            Settings
-          </h1>
+      {/* ACCOUNT */}
+      <section className="pq-panel">
+        <h2 className="pq-h2" style={sectionTitle}>Account</h2>
+        <p className="pq-sub" style={{ marginBottom: 16 }}>
+          The wallet you signed in with. Payments from your invoices go here.
+        </p>
 
-          <p
-            style={{
-              margin: "8px 0 0",
-              color: theme.muted,
-              fontSize: "14px"
-            }}
-          >
-            Manage your PayQuick account and payment preferences.
-          </p>
+        <div className="pq-linkbox">
+          <small>Wallet address</small>
+          <span className="pq-num">{walletAddress}</span>
         </div>
 
-        {/* ACCOUNT */}
-        <div
-          style={{
-            ...cardStyle,
-            marginBottom: "18px"
-          }}
-        >
-          <div
-            style={{
-              marginBottom: "20px"
-            }}
+        <div className="pq-actions" style={{ marginTop: 12 }}>
+          <CopyButton value={walletAddress || ""} label="Copy address" />
+          <a
+            className="pq-btn pq-secondary pq-sm"
+            href={addressUrl(walletAddress)}
+            target="_blank"
+            rel="noopener noreferrer"
           >
-            <h2
-              style={{
-                margin: 0,
-                fontSize: "18px"
-              }}
-            >
-              Account
-            </h2>
-
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: theme.muted,
-                fontSize: "13px"
-              }}
-            >
-              Your connected PayQuick merchant account.
-            </p>
-          </div>
-
-          <div
-            style={{
-              display: "grid",
-              gap: "14px"
-            }}
-          >
-            <div
-              style={{
-                padding: "15px",
-                border: `1px solid ${theme.border}`,
-                borderRadius: "12px"
-              }}
-            >
-              <p
-                style={{
-                  margin: "0 0 7px",
-                  color: theme.muted,
-                  fontSize: "12px"
-                }}
-              >
-                Wallet address
-              </p>
-
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "12px",
-                  flexWrap: "wrap"
-                }}
-              >
-                <strong
-                  style={{
-                    fontFamily:
-                      "ui-monospace, SFMono-Regular, Menlo, monospace",
-                    fontSize: "14px"
-                  }}
-                >
-                  {shortenAddress(
-                    merchant.wallet_address
-                  )}
-                </strong>
-
-                <button
-                  type="button"
-                  onClick={copyWalletAddress}
-                  style={{
-                    border: `1px solid ${theme.border}`,
-                    background: theme.card,
-                    color: theme.text,
-                    borderRadius: "8px",
-                    padding: "7px 10px",
-                    cursor: "pointer",
-                    fontSize: "12px"
-                  }}
-                >
-                  {copied ? "Copied!" : "Copy"}
-                </button>
-              </div>
-            </div>
-
-            <div
-              style={{
-                padding: "15px",
-                border: `1px solid ${theme.border}`,
-                borderRadius: "12px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: "15px",
-                flexWrap: "wrap"
-              }}
-            >
-              <div>
-                <p
-                  style={{
-                    margin: "0 0 5px",
-                    color: theme.muted,
-                    fontSize: "12px"
-                  }}
-                >
-                  Connection status
-                </p>
-
-                <strong
-                  style={{
-                    fontSize: "14px"
-                  }}
-                >
-                  Wallet connected
-                </strong>
-              </div>
-
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "7px",
-                  color: theme.green,
-                  background: theme.greenSoft,
-                  borderRadius: "999px",
-                  padding: "7px 11px",
-                  fontSize: "12px",
-                  fontWeight: "600"
-                }}
-              >
-                <span
-                  style={{
-                    width: "7px",
-                    height: "7px",
-                    borderRadius: "50%",
-                    background: theme.green
-                  }}
-                />
-
-                Connected
-              </span>
-            </div>
-          </div>
+            View on Arcscan
+          </a>
+          <span className="pq-badge pq-b-success" style={{ alignSelf: "center" }}>
+            Connected
+          </span>
         </div>
+      </section>
 
-        {/* WITHDRAW */}
-        <div
-          style={{
-            ...cardStyle,
-            marginBottom: "18px"
-          }}
-        >
-          <div
-            style={{
-              marginBottom: "20px"
-            }}
-          >
-            <h2
-              style={{
-                margin: 0,
-                fontSize: "18px"
-              }}
-            >
-              Withdraw Funds
-            </h2>
+      {/* WITHDRAW */}
+      <section className="pq-panel">
+        <h2 className="pq-h2" style={sectionTitle}>Withdraw funds</h2>
+        <p className="pq-sub" style={{ marginBottom: 16 }}>
+          Send USDC from your merchant wallet to another address on Arc Testnet.
+        </p>
 
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: theme.muted,
-                fontSize: "13px"
-              }}
+        {withdrawal && (
+          <div style={{ marginBottom: 16 }} aria-live="polite">
+            <Alert
+              tone={
+                withdrawal.status === "confirmed"
+                  ? "success"
+                  : withdrawal.status === "failed"
+                  ? "danger"
+                  : "info"
+              }
             >
-              Send USDC from your merchant wallet to another address.
-            </p>
+              {withdrawal.status === "confirming" &&
+                "Withdrawal sent. Waiting for Arc to confirm it."}
+              {withdrawal.status === "confirmed" &&
+                `Withdrawal confirmed: ${formatAmount(withdrawal.amount)} USDC sent to ${shortAddress(withdrawal.to)}.`}
+              {withdrawal.status === "failed" &&
+                "The withdrawal failed on the network. Your funds were not sent; only the network fee was used."}{" "}
+              <a className="pq-link" href={txUrl(withdrawal.hash)} target="_blank" rel="noopener noreferrer">
+                View transaction
+              </a>
+            </Alert>
           </div>
+        )}
 
-          <form onSubmit={handleWithdraw}>
-            <div
-              style={{
-                display: "grid",
-                gap: "14px"
-              }}
-            >
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "7px",
-                  fontSize: "12px",
-                  fontWeight: "600",
-                  color: theme.muted
-                }}
-              >
-                Recipient address
-
+        {withdrawStep === "form" && (
+          <form onSubmit={handleReview}>
+            <div className="pq-form-grid" style={{ gridTemplateColumns: "1fr" }}>
+              <Field label="Recipient address">
                 <input
+                  className="pq-input pq-num"
                   value={withdrawTo}
                   onChange={(event) => setWithdrawTo(event.target.value)}
-                  placeholder="0x..."
+                  placeholder="0x…"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
                   required
-                  style={{
-                    height: "44px",
-                    boxSizing: "border-box",
-                    border: `1px solid ${theme.border}`,
-                    background: theme.background,
-                    color: theme.text,
-                    borderRadius: "9px",
-                    padding: "0 12px",
-                    fontSize: "13px",
-                    outline: "none",
-                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace"
-                  }}
                 />
-              </label>
+              </Field>
 
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "7px",
-                  fontSize: "12px",
-                  fontWeight: "600",
-                  color: theme.muted
-                }}
+              <Field
+                label="Amount"
+                hint={
+                  balance !== null
+                    ? `Available: ${formatAmount(balance)} USDC. Network fees are paid in USDC too.`
+                    : "Network fees are paid in USDC."
+                }
               >
-                Amount (USDC)
+                <div className="pq-unit">
+                  <input
+                    className="pq-input"
+                    inputMode="decimal"
+                    value={withdrawAmount}
+                    onChange={(event) => setWithdrawAmount(event.target.value)}
+                    placeholder="10.00"
+                    autoComplete="off"
+                    required
+                  />
+                  <span>USDC</span>
+                </div>
+              </Field>
+            </div>
 
-                <input
-                  type="number"
-                  min="0"
-                  step="0.000001"
-                  value={withdrawAmount}
-                  onChange={(event) => setWithdrawAmount(event.target.value)}
-                  placeholder="10"
-                  required
-                  style={{
-                    height: "44px",
-                    boxSizing: "border-box",
-                    border: `1px solid ${theme.border}`,
-                    background: theme.background,
-                    color: theme.text,
-                    borderRadius: "9px",
-                    padding: "0 12px",
-                    fontSize: "14px",
-                    outline: "none"
-                  }}
-                />
-              </label>
+            {withdrawError && (
+              <div style={{ marginTop: 16 }}>
+                <Alert tone="danger">{withdrawError}</Alert>
+              </div>
+            )}
 
-              {withdrawError && (
-                <p
-                  role="alert"
-                  style={{
-                    margin: 0,
-                    color: theme.red,
-                    fontSize: "12px"
-                  }}
-                >
-                  {withdrawError}
-                </p>
-              )}
-
-              {withdrawSuccess && (
-                <p
-                  style={{
-                    margin: 0,
-                    color: theme.green,
-                    fontSize: "12px",
-                    wordBreak: "break-all"
-                  }}
-                >
-                  {withdrawSuccess}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                disabled={withdrawing}
-                style={{
-                  border: "none",
-                  background: theme.primary,
-                  color: "#ffffff",
-                  borderRadius: "9px",
-                  padding: "12px 18px",
-                  cursor: withdrawing ? "not-allowed" : "pointer",
-                  fontSize: "13px",
-                  fontWeight: "700",
-                  minHeight: "44px"
-                }}
-              >
-                {withdrawing ? "Sending..." : "Send Withdrawal"}
-              </button>
+            <div className="pq-actions" style={{ marginTop: 18 }}>
+              <Button type="submit" disabled={withdrawal?.status === "confirming"}>
+                Review withdrawal
+              </Button>
             </div>
           </form>
-        </div>
+        )}
 
-        {/* API KEYS */}
-        <div
-          style={{
-            ...cardStyle,
-            marginBottom: "18px"
-          }}
-        >
-          <div style={{ marginBottom: "20px" }}>
-            <h2 style={{ margin: 0, fontSize: "18px" }}>
-              API Keys
-            </h2>
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: theme.muted,
-                fontSize: "13px"
-              }}
-            >
-              Generate keys for developers to integrate with PayQuick.
-            </p>
+        {(withdrawStep === "review" || sending) && (
+          <div>
+            <dl className="pq-kv" style={{ gridTemplateColumns: "1fr" }}>
+              <div>
+                <dt>You are sending</dt>
+                <dd className="pq-num" style={{ fontSize: 22 }}>
+                  {formatAmount(withdrawAmount)} USDC
+                </dd>
+              </div>
+              <div>
+                <dt>To</dt>
+                <dd className="pq-num">{withdrawTo}</dd>
+              </div>
+              <div>
+                <dt>Network</dt>
+                <dd>Arc Testnet</dd>
+              </div>
+            </dl>
+
+            <div style={{ marginTop: 16 }}>
+              <Alert tone="warning">
+                Blockchain transfers can't be undone. Check the address carefully before you confirm.
+              </Alert>
+            </div>
+
+            {withdrawError && (
+              <div style={{ marginTop: 12 }}>
+                <Alert tone="danger">{withdrawError}</Alert>
+              </div>
+            )}
+
+            <div className="pq-actions" style={{ marginTop: 18 }}>
+              <Button loading={sending} onClick={handleConfirmWithdraw}>
+                {sending ? "Confirm in your wallet…" : "Confirm and send"}
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={sending}
+                onClick={() => {
+                  setWithdrawError("");
+                  setWithdrawStep("form");
+                }}
+              >
+                Back
+              </Button>
+            </div>
           </div>
+        )}
+      </section>
 
-          <form onSubmit={handleCreateKey} style={{ marginBottom: "18px" }}>
-            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <input
-                value={keyName}
-                onChange={(event) => setKeyName(event.target.value)}
-                placeholder="Key name (e.g. Website integration)"
-                style={{
-                  flex: 1,
-                  minWidth: "200px",
-                  height: "44px",
-                  boxSizing: "border-box",
-                  border: `1px solid ${theme.border}`,
-                  background: theme.background,
-                  color: theme.text,
-                  borderRadius: "9px",
-                  padding: "0 12px",
-                  fontSize: "13px",
-                  outline: "none"
-                }}
-              />
+      {/* API KEYS */}
+      <section className="pq-panel">
+        <h2 className="pq-h2" style={sectionTitle}>API keys</h2>
+        <p className="pq-sub" style={{ marginBottom: 16 }}>
+          Keys let your own website or app create invoices through PayQuick.
+        </p>
 
-              <button
-                type="submit"
-                disabled={creatingKey}
-                style={{
-                  border: "none",
-                  background: theme.primary,
-                  color: "#ffffff",
-                  borderRadius: "9px",
-                  padding: "0 18px",
-                  cursor: creatingKey ? "not-allowed" : "pointer",
-                  fontSize: "13px",
-                  fontWeight: "700",
-                  minHeight: "44px"
-                }}
-              >
-                {creatingKey ? "Generating..." : "Generate Key"}
-              </button>
-            </div>
-          </form>
+        <form onSubmit={handleCreateKey}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input
+              className="pq-input"
+              style={{ flex: 1, minWidth: 200 }}
+              value={keyName}
+              onChange={(event) => setKeyName(event.target.value)}
+              placeholder="Key name, e.g. Website"
+              aria-label="API key name"
+              autoComplete="off"
+            />
+            <Button type="submit" loading={creatingKey}>
+              {creatingKey ? "Generating…" : "Generate key"}
+            </Button>
+          </div>
+        </form>
 
-          {newRawKey && (
-            <div
-              style={{
-                marginBottom: "18px",
-                padding: "14px",
-                borderRadius: "10px",
-                border: `1px solid ${theme.primary}`,
-                background: theme.background
-              }}
-            >
-              <p style={{ margin: "0 0 8px", fontSize: "12px", color: theme.muted }}>
-                Copy this key now — it will not be shown again.
-              </p>
+        {newRawKey && (
+          <div style={{ marginTop: 16 }}>
+            <Alert tone="warning">
+              Copy this key now. It won't be shown again.
               <code
-                style={{
-                  display: "block",
-                  wordBreak: "break-all",
-                  fontSize: "12px",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace"
-                }}
+                className="pq-num"
+                style={{ display: "block", marginTop: 8, overflowWrap: "anywhere", fontSize: 13 }}
               >
                 {newRawKey}
               </code>
-            </div>
-          )}
+              <div className="pq-actions" style={{ marginTop: 10 }}>
+                <CopyButton value={newRawKey} label="Copy key" />
+                <Button variant="ghost" size="sm" onClick={() => setNewRawKey("")}>
+                  I've saved it
+                </Button>
+              </div>
+            </Alert>
+          </div>
+        )}
 
-          {keyError && (
-            <p role="alert" style={{ color: theme.red, fontSize: "12px", marginBottom: "14px" }}>
-              {keyError}
-            </p>
-          )}
+        {keyError && (
+          <div style={{ marginTop: 16 }}>
+            <Alert tone="danger">{keyError}</Alert>
+          </div>
+        )}
 
-          {loadingKeys ? (
-            <p style={{ color: theme.muted, fontSize: "13px" }}>Loading keys...</p>
+        <div style={{ marginTop: 16 }}>
+          {loadingKeys && apiKeys.length === 0 ? (
+            <div className="pq-skel" style={{ height: 56, borderRadius: 10 }} aria-busy="true" />
           ) : apiKeys.length === 0 ? (
-            <p style={{ color: theme.muted, fontSize: "13px" }}>No API keys yet.</p>
+            <p className="pq-sub" style={{ margin: 0 }}>No API keys yet.</p>
           ) : (
-            <div style={{ display: "grid", gap: "10px" }}>
-              {apiKeys.map((key) => (
-                <div
-                  key={key.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: "12px",
-                    padding: "12px 14px",
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: "10px",
-                    flexWrap: "wrap"
-                  }}
-                >
-                  <div>
-                    <strong style={{ fontSize: "13px" }}>
-                      {key.name || "Unnamed key"}
-                    </strong>
-                    <div
-                      style={{
-                        color: theme.muted,
-                        fontSize: "11px",
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace"
-                      }}
-                    >
-                      {key.key_prefix}...
-                    </div>
+            apiKeys.map((key) => (
+              <div
+                key={key.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                  flexWrap: "wrap",
+                  padding: "12px 0",
+                  borderTop: "1px solid var(--pq-border)"
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <strong style={{ fontSize: 14 }}>{key.name || "Unnamed key"}</strong>
+                  <div className="pq-item-meta pq-num">
+                    {key.key_prefix}…
+                    {key.created_at ? ` · created ${formatDate(key.created_at)}` : ""}
                   </div>
-
-                  {key.revoked_at ? (
-                    <span style={{ color: theme.red, fontSize: "11px", fontWeight: "700" }}>
-                      Revoked
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleRevokeKey(key.id)}
-                      style={{
-                        border: `1px solid ${theme.red}`,
-                        background: "transparent",
-                        color: theme.red,
-                        borderRadius: "8px",
-                        padding: "7px 11px",
-                        cursor: "pointer",
-                        fontSize: "11px",
-                        fontWeight: "600"
-                      }}
-                    >
-                      Revoke
-                    </button>
-                  )}
                 </div>
-              ))}
-            </div>
+
+                {key.revoked_at ? (
+                  <span className="pq-badge pq-b-neutral">Revoked</span>
+                ) : confirmRevokeId === key.id ? (
+                  <span className="pq-actions">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={revokingId === key.id}
+                      onClick={() => handleRevokeKey(key.id)}
+                    >
+                      Yes, revoke
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={revokingId === key.id}
+                      onClick={() => setConfirmRevokeId(null)}
+                    >
+                      Cancel
+                    </Button>
+                  </span>
+                ) : (
+                  <Button size="sm" variant="secondary" onClick={() => setConfirmRevokeId(key.id)}>
+                    Revoke
+                  </Button>
+                )}
+              </div>
+            ))
           )}
         </div>
+      </section>
 
-        {/* APPEARANCE */}
-        <div
-          style={{
-            ...cardStyle,
-            marginBottom: "18px"
-          }}
-        >
-          <div
-            style={{
-              marginBottom: "20px"
-            }}
-          >
-            <h2
-              style={{
-                margin: 0,
-                fontSize: "18px"
-              }}
-            >
-              Appearance
-            </h2>
-
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: theme.muted,
-                fontSize: "13px"
-              }}
-            >
-              Choose how PayQuick looks on your device.
+      {/* APPEARANCE */}
+      <section className="pq-panel">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+          <div>
+            <h2 className="pq-h2" style={sectionTitle}>Dark mode</h2>
+            <p className="pq-sub" style={{ margin: 0 }}>
+              {darkMode ? "Dark theme is on." : "Light theme is on."}
             </p>
           </div>
 
-          <div
+          <button
+            type="button"
+            role="switch"
+            aria-checked={darkMode}
+            aria-label="Dark mode"
+            className="pq-chip"
+            disabled={!setDarkMode}
+            onClick={() => setDarkMode?.((current) => !current)}
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "20px",
-              flexWrap: "wrap"
+              width: 54,
+              minHeight: 32,
+              height: 32,
+              padding: 0,
+              borderRadius: 999,
+              position: "relative",
+              background: darkMode ? "var(--pq-primary)" : "var(--pq-sunken)"
             }}
           >
-            <div>
-              <strong
-                style={{
-                  display: "block",
-                  marginBottom: "5px",
-                  fontSize: "14px"
-                }}
-              >
-                Dark mode
-              </strong>
-
-              <span
-                style={{
-                  color: theme.muted,
-                  fontSize: "12px"
-                }}
-              >
-                {darkMode
-                  ? "Dark theme is currently enabled."
-                  : "Light theme is currently enabled."}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() =>
-                setDarkMode(
-                  (current) => !current
-                )
-              }
+            <span
+              aria-hidden="true"
               style={{
-                border: `1px solid ${theme.border}`,
-                background: darkMode
-                  ? theme.primary
-                  : theme.card,
-                color: darkMode
-                  ? "#ffffff"
-                  : theme.text,
-                borderRadius: "10px",
-                padding: "9px 14px",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: "600"
+                position: "absolute",
+                top: 3,
+                left: darkMode ? 25 : 3,
+                width: 24,
+                height: 24,
+                borderRadius: "50%",
+                background: darkMode ? "var(--pq-onPrimary)" : "var(--pq-surface)",
+                boxShadow: "0 1px 3px rgba(0,0,0,.3)",
+                transition: "left .15s"
               }}
-            >
-              {darkMode
-                ? "Switch to Light"
-                : "Switch to Dark"}
-            </button>
-          </div>
+            />
+          </button>
         </div>
+      </section>
 
-        {/* PAYMENT */}
-        <div
-          style={{
-            ...cardStyle,
-            marginBottom: "18px"
-          }}
-        >
-          <div
-            style={{
-              marginBottom: "20px"
-            }}
-          >
-            <h2
-              style={{
-                margin: 0,
-                fontSize: "18px"
-              }}
-            >
-              Payment Preferences
-            </h2>
+      {/* NETWORK */}
+      <section className="pq-panel">
+        <h2 className="pq-h2" style={sectionTitle}>Payments</h2>
+        <p className="pq-sub" style={{ marginBottom: 16 }}>
+          How PayQuick currently settles payments.
+        </p>
 
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: theme.muted,
-                fontSize: "13px"
-              }}
-            >
-              Current payment configuration for your account.
-            </p>
+        <dl className="pq-kv">
+          <div>
+            <dt>Currency</dt>
+            <dd>USDC</dd>
           </div>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns:
-                "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: "14px"
-            }}
-          >
-            <div
-              style={{
-                padding: "16px",
-                border: `1px solid ${theme.border}`,
-                borderRadius: "12px"
-              }}
-            >
-              <span
-                style={{
-                  display: "block",
-                  color: theme.muted,
-                  fontSize: "12px",
-                  marginBottom: "8px"
-                }}
-              >
-                Default currency
-              </span>
-
-              <strong
-                style={{
-                  fontSize: "18px"
-                }}
-              >
-                USDC
-              </strong>
-            </div>
-
-            <div
-              style={{
-                padding: "16px",
-                border: `1px solid ${theme.border}`,
-                borderRadius: "12px"
-              }}
-            >
-              <span
-                style={{
-                  display: "block",
-                  color: theme.muted,
-                  fontSize: "12px",
-                  marginBottom: "8px"
-                }}
-              >
-                Network
-              </span>
-
-              <strong
-                style={{
-                  fontSize: "18px"
-                }}
-              >
-                Arc Testnet
-              </strong>
-            </div>
+          <div>
+            <dt>Network</dt>
+            <dd>Arc Testnet</dd>
           </div>
-        </div>
+        </dl>
 
-        {/* ABOUT */}
-        <div
-          style={{
-            ...cardStyle
-          }}
-        >
-          <h2
-            style={{
-              margin: "0 0 7px",
-              fontSize: "18px"
-            }}
-          >
-            About PayQuick
-          </h2>
-
-          <p
-            style={{
-              margin: "0 0 18px",
-              color: theme.muted,
-              fontSize: "13px",
-              lineHeight: "1.6"
-            }}
-          >
-            PayQuick helps merchants create invoices,
-            receive USDC payments, and track payment
-            activity on Arc.
-          </p>
-
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "15px",
-              paddingTop: "15px",
-              borderTop: `1px solid ${theme.border}`,
-              color: theme.muted,
-              fontSize: "12px",
-              flexWrap: "wrap"
-            }}
-          >
-            <span>PayQuick</span>
-            <span>Version 0.1.0</span>
-          </div>
-        </div>
-      </div>
-    </section>
+        <p className="pq-item-meta" style={{ margin: "14px 0 0", lineHeight: 1.5 }}>
+          Test USDC has no real-world value. PayQuick runs on Arc Testnet only for now.
+        </p>
+      </section>
+    </PageScope>
   );
 }

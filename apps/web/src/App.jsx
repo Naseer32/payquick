@@ -269,6 +269,7 @@ export default function App() {
     <Settings
       merchant={merchant}
       darkMode={darkMode}
+      setDarkMode={setDarkMode}
     />
   );
 
