@@ -1,54 +1,68 @@
-const API_URL =
-  (import.meta.env.VITE_API_URL || "https://payquick-v2.onrender.com").trim();
+const API_URL = (
+  import.meta.env.VITE_API_URL || "https://payquick-v2.onrender.com"
+).trim();
+
+// Render free instances can take a while to wake up, so the timeout is generous.
+const TIMEOUT_MS = 45000;
 
 export async function apiRequest(path, options = {}) {
   const token = localStorage.getItem("payquick_session");
-  const url = `${API_URL}${path}`;
-
-  console.log("PayQuick API request:", {
-    url,
-    method: options.method || "GET"
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(token
-          ? {
-              Authorization: `Bearer ${token}`
-            }
-          : {}),
-        ...(options.headers || {})
+    let response;
+
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        ...options,
+        signal: options.signal || controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(options.headers || {})
+        }
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error(
+          "The server took too long to respond. It may be waking up, so try again in a few seconds."
+        );
       }
-    });
-
-    console.log("PayQuick API response:", response.status, url);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => null);
 
       throw new Error(
-  error?.error ||
-  error?.detail?.message ||
-  error?.detail?.code ||
-  `API request failed: ${response.status}`
-);
+        "Can't reach the PayQuick server. Check your connection and try again."
+      );
     }
 
-    return response.json();
-  } catch (error) {
-    console.error("PayQuick API request failed:", {
-      url,
-      error
-    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      const error = new Error(
+        body?.error ||
+          body?.detail?.message ||
+          body?.detail?.code ||
+          `Request failed (${response.status})`
+      );
+      error.status = response.status;
+      throw error;
+    }
 
-    throw error;
+    if (response.status === 204) {
+      return null;
+    }
+
+    const text = await response.text();
+    return text ? JSON.parse(text) : null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 export function saveSession(token) {
+  if (!token) {
+    return;
+  }
+
   localStorage.setItem("payquick_session", token);
 }
 
