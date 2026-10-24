@@ -14,7 +14,7 @@ export default function App() {
   const [activeSection, setActiveSection] = useState(() => {
     const path = window.location.pathname;
 
-    if (path === "invoices" || path === "/invoices") return "invoices";
+    if (path === "/invoices") return "invoices";
     if (path === "/payments") return "payments";
     if (path === "/customers") return "customers";
     if (path === "/settings") return "settings";
@@ -142,7 +142,7 @@ export default function App() {
           color: darkMode ? "#f8fafc" : "#0f172a"
         }}
       >
-        <Checkout checkoutToken={checkoutToken} />
+        <Checkout checkoutToken={checkoutToken} darkMode={darkMode} />
       </main>
     );
   }
@@ -575,6 +575,7 @@ const activeLabel =
             <WalletButton
               onAuthenticated={setMerchant}
               isMobile={isMobile}
+              darkMode={darkMode}
             />
           </div>
         </header>
