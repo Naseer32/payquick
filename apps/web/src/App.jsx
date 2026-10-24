@@ -1,13 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Component,
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useRef,
+  useState
+} from "react";
 
-import Landing from "./pages/Landing.jsx";
-import Dashboard from "./pages/Dashboard.jsx";
-import Invoices from "./pages/Invoices.jsx";
-import Checkout from "./pages/Checkout.jsx";
-import Customers from "./pages/Customers.jsx";
-import Payments from "./pages/Payments.jsx";
-import Settings from "./pages/Settings.jsx";
 import WalletButton from "./components/WalletButton.jsx";
+
+// Each page loads when it's first opened, so the app starts fast and only the pages
+// that need the wallet library (checkout, settings) download it.
+const Landing = lazy(() => import("./pages/Landing.jsx"));
+const Dashboard = lazy(() => import("./pages/Dashboard.jsx"));
+const Invoices = lazy(() => import("./pages/Invoices.jsx"));
+const Checkout = lazy(() => import("./pages/Checkout.jsx"));
+const Customers = lazy(() => import("./pages/Customers.jsx"));
+const Payments = lazy(() => import("./pages/Payments.jsx"));
+const Settings = lazy(() => import("./pages/Settings.jsx"));
 import { ThemeScope } from "./components/ui.jsx";
 import { getTheme } from "./theme.js";
 
@@ -92,6 +103,56 @@ function Icon({ name }) {
     >
       {ICONS[name]}
     </svg>
+  );
+}
+
+// Catches a page that fails to load (for example after a new deploy, or with no connection).
+class PageBoundary extends Component {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+
+    return (
+      <div role="alert" style={{ maxWidth: 420, margin: "64px auto", padding: 24, textAlign: "center", fontFamily: "system-ui, sans-serif" }}>
+        <h1 style={{ fontSize: 20, margin: "0 0 8px" }}>This page didn't load</h1>
+        <p style={{ margin: "0 0 18px", lineHeight: 1.5, opacity: 0.8 }}>
+          Check your connection, then reload. If PayQuick was just updated, reloading
+          fetches the latest version.
+        </p>
+        <button
+          type="button"
+          style={{ minHeight: 46, padding: "0 20px", border: 0, borderRadius: 10, background: "#1B55E8", color: "#fff", font: "inherit", fontWeight: 650, cursor: "pointer" }}
+          onClick={() => window.location.reload()}
+        >
+          Reload
+        </button>
+      </div>
+    );
+  }
+}
+
+function Screen({ children, inShell = false }) {
+  return (
+    <PageBoundary>
+      <Suspense
+        fallback={
+          inShell ? (
+            <div className="pq-skel" aria-busy="true" aria-label="Loading page" style={{ height: 240, borderRadius: 16 }} />
+          ) : (
+            <div role="status" style={{ padding: 40, textAlign: "center", fontFamily: "system-ui, sans-serif", opacity: 0.7 }}>
+              Loading…
+            </div>
+          )
+        }
+      >
+        {children}
+      </Suspense>
+    </PageBoundary>
   );
 }
 
@@ -247,11 +308,19 @@ export default function App() {
   }, []);
 
   if (route.page === "checkout") {
-    return <Checkout checkoutToken={route.token} darkMode={darkMode} />;
+    return (
+      <Screen>
+        <Checkout checkoutToken={route.token} darkMode={darkMode} />
+      </Screen>
+    );
   }
 
   if (route.page === "landing") {
-    return <Landing onGetStarted={() => navigate("dashboard")} />;
+    return (
+      <Screen>
+        <Landing onGetStarted={() => navigate("dashboard")} />
+      </Screen>
+    );
   }
 
   function renderPage() {
@@ -373,7 +442,7 @@ export default function App() {
         </header>
 
         <main id="main" className="pq-content" tabIndex={-1} ref={mainRef}>
-          {renderPage()}
+          <Screen inShell>{renderPage()}</Screen>
         </main>
 
         <nav className="pq-bottom" aria-label="Primary">
