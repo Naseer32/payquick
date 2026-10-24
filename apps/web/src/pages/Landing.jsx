@@ -422,7 +422,7 @@ export default function Landing({
               <a href="https://github.com/Naseer32" target="_blank" rel="noopener noreferrer">
                 GitHub: Naseer32
               </a>
-              <span>Discord: nassuba</span>
+              <a href="https://discord.com/users/788585408199000065" target="_blank" rel="noopener noreferrer">Discord: nassuba</a>
             </div>
           </div>
         </footer>
