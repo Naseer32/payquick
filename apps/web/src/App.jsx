@@ -278,6 +278,7 @@ export default function App() {
         <Dashboard
           merchant={merchant}
           darkMode={darkMode}
+          onNavigate={handleNavigation}
         />
       );
   }
