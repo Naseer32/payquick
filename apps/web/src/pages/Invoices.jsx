@@ -1,61 +1,122 @@
-Invoices.jsx
-
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { apiRequest } from "../services/api.js";
+import {
+  Button,
+  Alert,
+  StatusBadge,
+  CopyButton,
+  formatAmount,
+  friendlyError
+} from "../components/ui.jsx";
+import {
+  PageScope,
+  Field,
+  Segmented,
+  EmptyState
+} from "../components/forms.jsx";
 
-export default function Invoices({ merchant }) {
-  const loadInvoicesRequestId = useRef(0);
+const PAID = ["paid", "confirmed"];
+const PENDING = ["pending", "processing"];
+
+function bucket(status) {
+  const value = String(status || "").toLowerCase();
+  if (PAID.includes(value)) return "paid";
+  if (PENDING.includes(value)) return "pending";
+  return "closed";
+}
+
+function nextInvoiceNumber(invoices) {
+  let max = 0;
+  let width = 4;
+
+  for (const invoice of invoices) {
+    const match = /^INV-(\d+)$/i.exec(String(invoice.invoice_number || ""));
+
+    if (match) {
+      max = Math.max(max, Number(match[1]));
+      width = Math.max(width, match[1].length);
+    }
+  }
+
+  return `INV-${String(max + 1).padStart(width, "0")}`;
+}
+
+function formatDate(value) {
+  if (!value) return "Not set";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "Not set";
+
+  return date.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+}
+
+function checkoutUrlFor(invoice) {
+  return `${window.location.origin}/pay/${encodeURIComponent(invoice.checkout_token)}`;
+}
+
+export default function Invoices({ merchant, darkMode = false }) {
+  const requestId = useRef(0);
 
   const [invoices, setInvoices] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState("");
+  const [customerError, setCustomerError] = useState("");
+
+  const [showForm, setShowForm] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [notice, setNotice] = useState("");
+
   const [customerId, setCustomerId] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState("USDC");
   const [description, setDescription] = useState("");
   const [dueAt, setDueAt] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState("");
-  const [copiedInvoiceId, setCopiedInvoiceId] = useState(null);
-  const [qrInvoiceId, setQrInvoiceId] = useState(null);
 
-  async function loadInvoices() {
-    const requestId = ++loadInvoicesRequestId.current;
+  const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [openId, setOpenId] = useState(null);
+  const [qrId, setQrId] = useState(null);
 
-    setLoading(true);
-    setError("");
+  const loadInvoices = useCallback(async (silent = false) => {
+    const id = ++requestId.current;
+
+    if (!silent) setLoading(true);
+    setListError("");
 
     try {
       const result = await apiRequest("/api/invoices");
 
-      if (requestId === loadInvoicesRequestId.current) {
+      if (id === requestId.current) {
         setInvoices(result.invoices || []);
       }
     } catch (err) {
-      if (requestId === loadInvoicesRequestId.current) {
-        setError(
-          err.message || "Unable to load invoices."
-        );
+      if (id === requestId.current && !silent) {
+        setListError(friendlyError(err));
       }
     } finally {
-      if (requestId === loadInvoicesRequestId.current) {
+      if (id === requestId.current && !silent) {
         setLoading(false);
       }
     }
-  }
+  }, []);
 
-  async function loadCustomers() {
+  const loadCustomers = useCallback(async () => {
+    setCustomerError("");
+
     try {
       const result = await apiRequest("/api/customers");
       setCustomers(result.customers || []);
     } catch (err) {
-      setError(
-        err.message || "Unable to load customers."
-      );
+      setCustomerError(friendlyError(err));
     }
-  }
+  }, []);
 
   useEffect(() => {
     if (!merchant) {
@@ -66,1245 +127,479 @@ export default function Invoices({ merchant }) {
 
     loadInvoices();
     loadCustomers();
-  }, [merchant]);
+  }, [merchant, loadInvoices, loadCustomers]);
 
   useEffect(() => {
     if (!merchant) return;
 
-    function handleVisibilityChange() {
+    function onVisible() {
       if (document.visibilityState === "visible") {
-        loadInvoices();
+        loadInvoices(true);
         loadCustomers();
       }
     }
 
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibilityChange
-    );
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [merchant, loadInvoices, loadCustomers]);
 
-    return () => {
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange
-      );
-    };
-  }, [merchant]);
+  // Keeps awaiting invoices fresh so a payment shows up without a manual refresh.
+  const hasPending = invoices.some((invoice) => bucket(invoice.status) === "pending");
 
-  function convertLocalDateTimeToUTC(value) {
-    if (!value) {
-      return null;
+  useEffect(() => {
+    if (!merchant || !hasPending) return;
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") loadInvoices(true);
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [merchant, hasPending, loadInvoices]);
+
+  const stats = useMemo(() => {
+    let collected = 0;
+    let outstanding = 0;
+    const counts = { all: invoices.length, pending: 0, paid: 0, closed: 0 };
+
+    for (const invoice of invoices) {
+      const kind = bucket(invoice.status);
+      counts[kind] += 1;
+
+      if (kind === "paid") collected += Number(invoice.amount || 0);
+      if (kind === "pending") outstanding += Number(invoice.amount || 0);
     }
 
-    const localDate = new Date(value);
+    return { collected, outstanding, counts };
+  }, [invoices]);
 
-    if (Number.isNaN(localDate.getTime())) {
-      throw new Error("Invalid due date.");
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+
+    return invoices.filter((invoice) => {
+      if (filter !== "all" && bucket(invoice.status) !== filter) return false;
+      if (!needle) return true;
+
+      return [
+        invoice.invoice_number,
+        invoice.customer_name,
+        invoice.customer_email,
+        invoice.description
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(needle));
+    });
+  }, [invoices, filter, query]);
+
+  function toggleForm() {
+    setNotice("");
+    setFormError("");
+
+    if (!showForm && !invoiceNumber) {
+      setInvoiceNumber(nextInvoiceNumber(invoices));
     }
 
-    return localDate.toISOString();
+    setShowForm((value) => !value);
   }
 
-  async function handleCreateInvoice(event) {
+  async function handleCreate(event) {
     event.preventDefault();
 
+    setFormError("");
+    setNotice("");
+
+    if (!(Number(amount) > 0)) {
+      setFormError("Enter an amount greater than 0.");
+      return;
+    }
+
+    let utcDueAt = null;
+
+    if (dueAt) {
+      const date = new Date(dueAt);
+
+      if (Number.isNaN(date.getTime())) {
+        setFormError("The due date isn't valid.");
+        return;
+      }
+
+      utcDueAt = date.toISOString();
+    }
+
     setCreating(true);
-    setError("");
 
     try {
-      const utcDueAt =
-        convertLocalDateTimeToUTC(dueAt);
-
       await apiRequest("/api/invoices", {
         method: "POST",
         body: JSON.stringify({
           customerId: customerId || null,
           invoiceNumber,
           amount,
-          currency,
+          currency: "USDC",
           description,
           dueAt: utcDueAt
         })
       });
 
+      setNotice(`Invoice ${invoiceNumber} created.`);
       setCustomerId("");
       setInvoiceNumber("");
       setAmount("");
       setDescription("");
       setDueAt("");
+      setShowForm(false);
+      setFilter("all");
 
       await loadInvoices();
     } catch (err) {
-      setError(
-        err.message || "Unable to create invoice."
-      );
+      setFormError(friendlyError(err));
     } finally {
       setCreating(false);
     }
   }
 
-  async function copyCheckoutLink(invoice) {
-    const checkoutUrl = getCheckoutUrl(invoice);
-
+  async function share(invoice) {
     try {
-      await navigator.clipboard.writeText(checkoutUrl);
-
-      setCopiedInvoiceId(invoice.id);
-
-      setTimeout(() => {
-        setCopiedInvoiceId(null);
-      }, 2000);
-    } catch (err) {
-      setError("Unable to copy checkout link.");
+      await navigator.share({
+        title: `Invoice ${invoice.invoice_number}`,
+        text: `Pay ${formatAmount(invoice.amount)} ${invoice.currency || "USDC"}`,
+        url: checkoutUrlFor(invoice)
+      });
+    } catch {
+      /* cancelled by the user */
     }
   }
-
-  function getCheckoutUrl(invoice) {
-    return (
-      `${window.location.origin}/pay/` +
-      encodeURIComponent(invoice.checkout_token)
-    );
-  }
-
-  function formatAmount(amount) {
-    return Number(amount || 0).toLocaleString(
-      undefined,
-      {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 6
-      }
-    );
-  }
-
-  function formatDate(dateValue) {
-    if (!dateValue) return "Not set";
-
-    const date = new Date(dateValue);
-
-    if (Number.isNaN(date.getTime())) {
-      return "Not set";
-    }
-
-    return date.toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short"
-    });
-  }
-
-  function getStatusStyle(status) {
-    const normalized = String(
-      status || ""
-    ).toLowerCase();
-
-    if (
-      normalized === "paid" ||
-      normalized === "confirmed"
-    ) {
-      return {
-        background: "#ecfdf5",
-        color: "#047857"
-      };
-    }
-
-    if (
-      normalized === "pending" ||
-      normalized === "processing"
-    ) {
-      return {
-        background: "#fffbeb",
-        color: "#b45309"
-      };
-    }
-
-    if (
-      normalized === "expired" ||
-      normalized === "failed" ||
-      normalized === "cancelled"
-    ) {
-      return {
-        background: "#fef2f2",
-        color: "#b91c1c"
-      };
-    }
-
-    return {
-      background: "#eff6ff",
-      color: "#1d4ed8"
-    };
-  }
-
-  const pageStyle = {
-    minHeight: "calc(100vh - 72px)",
-    padding: "32px 20px 60px",
-    boxSizing: "border-box",
-    background: "#f8fafc",
-    color: "#0f172a"
-  };
-
-  const containerStyle = {
-    maxWidth: "1120px",
-    margin: "0 auto"
-  };
-
-  const cardStyle = {
-    background: "#ffffff",
-    border: "1px solid #e2e8f0",
-    borderRadius: "16px",
-    boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)"
-  };
 
   if (!merchant) {
     return (
-      <section style={pageStyle}>
-        <div
-          style={{
-            ...containerStyle,
-            maxWidth: "600px",
-            paddingTop: "70px"
-          }}
-        >
-          <div
-            style={{
-              ...cardStyle,
-              padding: "50px 30px",
-              textAlign: "center"
-            }}
-          >
-            <div
-              style={{
-                width: "64px",
-                height: "64px",
-                margin: "0 auto 20px",
-                borderRadius: "16px",
-                background: "#eff6ff",
-                color: "#2563eb",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "28px",
-                fontWeight: "800"
-              }}
-            >
-              $
-            </div>
-
-            <h2
-              style={{
-                margin: "0 0 10px",
-                fontSize: "26px"
-              }}
-            >
-              Invoices
-            </h2>
-
-            <p
-              style={{
-                margin: 0,
-                color: "#64748b",
-                lineHeight: "1.6"
-              }}
-            >
-              Connect your wallet to create and
-              manage payment invoices.
-            </p>
-          </div>
-        </div>
-      </section>
+      <PageScope dark={darkMode}>
+        <EmptyState
+          title="Connect your wallet"
+          text="Connect your wallet to create invoices and share payment links with your customers."
+        />
+      </PageScope>
     );
   }
 
+  const currency = invoices[0]?.currency || "USDC";
+
   return (
-    <section style={pageStyle}>
-      <div style={containerStyle}>
-        {/* PAGE HEADER */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: "20px",
-            marginBottom: "28px",
-            flexWrap: "wrap"
-          }}
-        >
-          <div>
-            <p
-              style={{
-                margin: "0 0 7px",
-                color: "#64748b",
-                fontSize: "13px",
-                fontWeight: "500"
-              }}
-            >
-              Payments
-            </p>
-
-            <h1
-              style={{
-                margin: 0,
-                fontSize: "30px",
-                lineHeight: "1.2",
-                letterSpacing: "-0.7px"
-              }}
-            >
-              Invoices
-            </h1>
-
-            <p
-              style={{
-                margin: "8px 0 0",
-                color: "#64748b",
-                fontSize: "14px"
-              }}
-            >
-              Create invoices and share secure
-              checkout links with your customers.
-            </p>
-          </div>
-
-          <div
-            style={{
-              background: "#eff6ff",
-              color: "#1d4ed8",
-              borderRadius: "10px",
-              padding: "9px 13px",
-              fontSize: "12px",
-              fontWeight: "600"
-            }}
-          >
-            {invoices.length}{" "}
-            {invoices.length === 1
-              ? "invoice"
-              : "invoices"}
-          </div>
+    <PageScope dark={darkMode}>
+      <div className="pq-head">
+        <div>
+          <h1 className="pq-h1">Invoices</h1>
+          <p className="pq-sub">Create invoices and share checkout links.</p>
         </div>
+        <Button onClick={toggleForm} variant={showForm ? "secondary" : "primary"}>
+          {showForm ? "Close" : "New invoice"}
+        </Button>
+      </div>
 
-        {/* CREATE INVOICE */}
-        <div
-          style={{
-            ...cardStyle,
-            padding: "24px",
-            marginBottom: "30px"
-          }}
-        >
-          <div
-            style={{
-              marginBottom: "22px"
-            }}
-          >
-            <h2
-              style={{
-                margin: 0,
-                fontSize: "19px"
-              }}
-            >
-              Create Invoice
-            </h2>
+      <div className="pq-stats">
+        <div className="pq-stat">
+          <span>Collected</span>
+          <b>{formatAmount(stats.collected)}</b>
+          <small>{currency} · {stats.counts.paid} paid</small>
+        </div>
+        <div className="pq-stat">
+          <span>Awaiting payment</span>
+          <b>{formatAmount(stats.outstanding)}</b>
+          <small>{currency} · {stats.counts.pending} open</small>
+        </div>
+        <div className="pq-stat">
+          <span>Total invoices</span>
+          <b>{stats.counts.all}</b>
+          <small>{stats.counts.closed} expired or failed</small>
+        </div>
+      </div>
 
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: "#64748b",
-                fontSize: "13px"
-              }}
-            >
-              Create a payment request for your
-              customer.
-            </p>
+      <div aria-live="polite">
+        {notice && (
+          <div style={{ marginBottom: 16 }}>
+            <Alert tone="success">{notice}</Alert>
           </div>
+        )}
+      </div>
 
-          <form onSubmit={handleCreateInvoice}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: "18px"
-              }}
+      {showForm && (
+        <form className="pq-panel" onSubmit={handleCreate}>
+          <h2 className="pq-h2" style={{ marginBottom: 16 }}>New invoice</h2>
+
+          <div className="pq-form-grid">
+            <Field
+              label="Customer"
+              hint={
+                customerError
+                  ? customerError
+                  : customers.length === 0
+                  ? "No customers yet. Add them on the Customers page."
+                  : "Optional"
+              }
             >
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "7px",
-                  fontSize: "13px",
-                  fontWeight: "600"
-                }}
+              <select
+                className="pq-input"
+                value={customerId}
+                onChange={(event) => setCustomerId(event.target.value)}
               >
-                Customer
-
-                <select
-                  value={customerId}
-                  onChange={(event) =>
-                    setCustomerId(
-                      event.target.value
-                    )
-                  }
-                  style={{
-                    height: "44px",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "9px",
-                    padding: "0 12px",
-                    background: "#ffffff",
-                    color: "#0f172a",
-                    fontSize: "14px",
-                    outline: "none"
-                  }}
-                >
-                  <option value="">
-                    No customer
+                <option value="">No customer</option>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name || customer.email || "Unnamed customer"}
                   </option>
+                ))}
+              </select>
+            </Field>
 
-                  {customers.map((customer) => (
-                    <option
-                      key={customer.id}
-                      value={customer.id}
-                    >
-                      {customer.name ||
-                        customer.email ||
-                        "Unnamed customer"}
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  type="button"
-                  onClick={loadCustomers}
-                  style={{
-                    marginTop: "6px",
-                    alignSelf: "flex-start",
-                    border: "none",
-                    background: "transparent",
-                    color: "#2563eb",
-                    fontSize: "11px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                    padding: 0
-                  }}
-                >
-                  Refresh customer list
-                </button>
-              </label>
-
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "7px",
-                  fontSize: "13px",
-                  fontWeight: "600"
-                }}
-              >
-                Invoice Number
-
-                <input
-                  value={invoiceNumber}
-                  onChange={(event) =>
-                    setInvoiceNumber(
-                      event.target.value
-                    )
-                  }
-                  placeholder="INV-0001"
-                  required
-                  style={{
-                    height: "44px",
-                    boxSizing: "border-box",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "9px",
-                    padding: "0 12px",
-                    fontSize: "14px",
-                    outline: "none"
-                  }}
-                />
-              </label>
-
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "7px",
-                  fontSize: "13px",
-                  fontWeight: "600"
-                }}
-              >
-                Amount
-
-                <div
-                  style={{
-                    display: "flex",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "9px",
-                    overflow: "hidden",
-                    height: "44px"
-                  }}
-                >
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.000001"
-                    value={amount}
-                    onChange={(event) =>
-                      setAmount(
-                        event.target.value
-                      )
-                    }
-                    placeholder="10"
-                    required
-                    style={{
-                      minWidth: 0,
-                      flex: 1,
-                      border: "none",
-                      padding: "0 12px",
-                      fontSize: "14px",
-                      outline: "none"
-                    }}
-                  />
-
-                  <div
-                    style={{
-                      width: "72px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      background: "#f8fafc",
-                      borderLeft:
-                        "1px solid #e2e8f0",
-                      color: "#475569",
-                      fontSize: "13px",
-                      fontWeight: "700"
-                    }}
-                  >
-                    USDC
-                  </div>
-                </div>
-              </label>
-
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "7px",
-                  fontSize: "13px",
-                  fontWeight: "600"
-                }}
-              >
-                Due Date
-
-                <input
-                  type="datetime-local"
-                  value={dueAt}
-                  onChange={(event) =>
-                    setDueAt(
-                      event.target.value
-                    )
-                  }
-                  style={{
-                    height: "44px",
-                    boxSizing: "border-box",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "9px",
-                    padding: "0 12px",
-                    fontSize: "14px",
-                    outline: "none"
-                  }}
-                />
-
-                <span
-                  style={{
-                    color: "#94a3b8",
-                    fontSize: "11px",
-                    fontWeight: "400"
-                  }}
-                >
-                  Minimum checkout validity is
-                  24 hours.
-                </span>
-              </label>
-            </div>
-
-            <label
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "7px",
-                marginTop: "18px",
-                fontSize: "13px",
-                fontWeight: "600"
-              }}
-            >
-              Description
-
-              <textarea
-                value={description}
-                onChange={(event) =>
-                  setDescription(
-                    event.target.value
-                  )
-                }
-                placeholder="Payment for services"
-                rows={3}
-                style={{
-                  resize: "vertical",
-                  minHeight: "85px",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: "9px",
-                  padding: "12px",
-                  fontFamily: "inherit",
-                  fontSize: "14px",
-                  outline: "none",
-                  boxSizing: "border-box"
-                }}
+            <Field label="Invoice number">
+              <input
+                className="pq-input"
+                value={invoiceNumber}
+                onChange={(event) => setInvoiceNumber(event.target.value)}
+                placeholder="INV-0001"
+                required
               />
-            </label>
+            </Field>
 
-            {error && (
-              <div
-                role="alert"
-                style={{
-                  marginTop: "18px",
-                  padding: "11px 13px",
-                  borderRadius: "9px",
-                  background: "#fef2f2",
-                  border: "1px solid #fecaca",
-                  color: "#b91c1c",
-                  fontSize: "13px"
-                }}
-              >
-                {error}
+            <Field label="Amount">
+              <div className="pq-unit">
+                <input
+                  className="pq-input"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.000001"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                  placeholder="10.00"
+                  required
+                />
+                <span>USDC</span>
               </div>
-            )}
+            </Field>
 
-            <button
-              type="submit"
-              disabled={creating}
-              style={{
-                marginTop: "20px",
-                minHeight: "44px",
-                border: "none",
-                borderRadius: "9px",
-                padding: "0 18px",
-                background: creating
-                  ? "#93c5fd"
-                  : "#2563eb",
-                color: "#ffffff",
-                cursor: creating
-                  ? "not-allowed"
-                  : "pointer",
-                fontSize: "13px",
-                fontWeight: "700"
-              }}
-            >
-              {creating
-                ? "Creating Invoice..."
-                : "Create Invoice"}
-            </button>
-          </form>
-        </div>
-
-        {/* INVOICE LIST HEADER */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: "15px",
-            marginBottom: "14px",
-            flexWrap: "wrap"
-          }}
-        >
-          <div>
-            <h2
-              style={{
-                margin: 0,
-                fontSize: "19px"
-              }}
-            >
-              Payment Invoices
-            </h2>
-
-            <p
-              style={{
-                margin: "5px 0 0",
-                color: "#64748b",
-                fontSize: "12px"
-              }}
-            >
-              Your latest invoice records
-            </p>
+            <Field label="Due date" hint="Optional. Checkout stays valid for at least 24 hours.">
+              <input
+                className="pq-input"
+                type="datetime-local"
+                value={dueAt}
+                onChange={(event) => setDueAt(event.target.value)}
+              />
+            </Field>
           </div>
 
-          <button
-            type="button"
-            onClick={loadInvoices}
-            disabled={loading}
-            style={{
-              border: "1px solid #cbd5e1",
-              background: "#ffffff",
-              color: "#334155",
-              borderRadius: "9px",
-              padding: "9px 13px",
-              cursor: loading
-                ? "not-allowed"
-                : "pointer",
-              fontSize: "12px",
-              fontWeight: "600"
-            }}
-          >
-            {loading ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-
-        {/* LOADING */}
-        {loading && (
-          <div
-            style={{
-              ...cardStyle,
-              padding: "45px 20px",
-              textAlign: "center",
-              color: "#64748b",
-              fontSize: "14px"
-            }}
-          >
-            Loading invoices...
+          <div style={{ marginTop: 16 }}>
+            <Field label="Description">
+              <textarea
+                className="pq-input"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="What is this payment for?"
+                rows={3}
+              />
+            </Field>
           </div>
-        )}
 
-        {/* EMPTY */}
-        {!loading && invoices.length === 0 && (
-          <div
-            style={{
-              ...cardStyle,
-              padding: "55px 20px",
-              textAlign: "center"
-            }}
-          >
-            <div
-              style={{
-                width: "54px",
-                height: "54px",
-                margin: "0 auto 16px",
-                borderRadius: "14px",
-                background: "#f1f5f9",
-                color: "#64748b",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "24px"
-              }}
-            >
-              #
-            </div>
-
-            <h3
-              style={{
-                margin: "0 0 7px",
-                fontSize: "17px"
-              }}
-            >
-              No invoices yet
-            </h3>
-
-            <p
-              style={{
-                margin: 0,
-                color: "#64748b",
-                fontSize: "13px"
-              }}
-            >
-              Create your first invoice above.
-            </p>
-          </div>
-        )}
-
-        {/* INVOICES */}
-        {!loading &&
-          invoices.length > 0 && (
-            <div
-              style={{
-                display: "grid",
-                gap: "16px"
-              }}
-            >
-              {invoices.map((invoice) => {
-                const checkoutUrl =
-                  getCheckoutUrl(invoice);
-
-                const showQr =
-                  qrInvoiceId === invoice.id;
-
-                const statusStyle =
-                  getStatusStyle(
-                    invoice.status
-                  );
-
-                return (
-                  <article
-                    key={invoice.id}
-                    style={{
-                      ...cardStyle,
-                      overflow: "hidden"
-                    }}
-                  >
-                    {/* INVOICE TOP */}
-                    <div
-                      style={{
-                        padding: "20px",
-                        display: "flex",
-                        justifyContent:
-                          "space-between",
-                        alignItems: "flex-start",
-                        gap: "20px",
-                        flexWrap: "wrap"
-                      }}
-                    >
-                      <div>
-                        <p
-                          style={{
-                            margin: "0 0 7px",
-                            color: "#94a3b8",
-                            fontSize: "11px",
-                            fontWeight: "600",
-                            textTransform:
-                              "uppercase",
-                            letterSpacing:
-                              "0.5px"
-                          }}
-                        >
-                          Invoice
-                        </p>
-
-                        <h3
-                          style={{
-                            margin: 0,
-                            fontSize: "18px",
-                            letterSpacing:
-                              "-0.2px"
-                          }}
-                        >
-                          {invoice.invoice_number ||
-                            invoice.id?.slice(
-                              0,
-                              8
-                            )}
-                        </h3>
-                      </div>
-
-                      <span
-                        style={{
-                          ...statusStyle,
-                          display:
-                            "inline-flex",
-                          alignItems:
-                            "center",
-                          borderRadius:
-                            "999px",
-                          padding:
-                            "6px 10px",
-                          fontSize: "11px",
-                          fontWeight: "700",
-                          textTransform:
-                            "capitalize"
-                        }}
-                      >
-                        {invoice.status ||
-                          "unknown"}
-                      </span>
-                    </div>
-
-                    {/* AMOUNT */}
-                    <div
-                      style={{
-                        margin: "0 20px",
-                        padding: "18px",
-                        borderRadius: "12px",
-                        background: "#f8fafc",
-                        border:
-                          "1px solid #e2e8f0"
-                      }}
-                    >
-                      <p
-                        style={{
-                          margin: "0 0 5px",
-                          color: "#64748b",
-                          fontSize: "11px",
-                          fontWeight: "600",
-                          textTransform:
-                            "uppercase"
-                        }}
-                      >
-                        Amount Due
-                      </p>
-
-                      <strong
-                        style={{
-                          display: "block",
-                          fontSize: "27px",
-                          letterSpacing:
-                            "-0.6px"
-                        }}
-                      >
-                        {formatAmount(
-                          invoice.amount
-                        )}{" "}
-                        {invoice.currency ||
-                          "USDC"}
-                      </strong>
-                    </div>
-
-                    {/* DETAILS */}
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns:
-                          "repeat(auto-fit, minmax(190px, 1fr))",
-                        gap: "1px",
-                        marginTop: "18px",
-                        borderTop:
-                          "1px solid #e2e8f0",
-                        borderBottom:
-                          "1px solid #e2e8f0"
-                      }}
-                    >
-                      <div
-                        style={{
-                          padding: "16px 20px"
-                        }}
-                      >
-                        <p
-                          style={{
-                            margin: "0 0 6px",
-                            color: "#94a3b8",
-                            fontSize: "10px",
-                            fontWeight: "700",
-                            textTransform:
-                              "uppercase"
-                          }}
-                        >
-                          Customer
-                        </p>
-
-                        <strong
-                          style={{
-                            display: "block",
-                            fontSize: "13px"
-                          }}
-                        >
-                          {invoice.customer_name ||
-                            "No customer"}
-                        </strong>
-
-                        {invoice.customer_email && (
-                          <span
-                            style={{
-                              display: "block",
-                              marginTop: "3px",
-                              color: "#64748b",
-                              fontSize: "11px"
-                            }}
-                          >
-                            {
-                              invoice.customer_email
-                            }
-                          </span>
-                        )}
-                      </div>
-
-                      <div
-                        style={{
-                          padding: "16px 20px",
-                          borderLeft:
-                            "1px solid #e2e8f0"
-                        }}
-                      >
-                        <p
-                          style={{
-                            margin: "0 0 6px",
-                            color: "#94a3b8",
-                            fontSize: "10px",
-                            fontWeight: "700",
-                            textTransform:
-                              "uppercase"
-                          }}
-                        >
-                          Due Date
-                        </p>
-
-                        <strong
-                          style={{
-                            display: "block",
-                            fontSize: "13px"
-                          }}
-                        >
-                          {formatDate(
-                            invoice.due_at
-                          )}
-                        </strong>
-                      </div>
-
-                      <div
-                        style={{
-                          padding: "16px 20px",
-                          borderLeft:
-                            "1px solid #e2e8f0"
-                        }}
-                      >
-                        <p
-                          style={{
-                            margin: "0 0 6px",
-                            color: "#94a3b8",
-                            fontSize: "10px",
-                            fontWeight: "700",
-                            textTransform:
-                              "uppercase"
-                          }}
-                        >
-                          Created
-                        </p>
-
-                        <strong
-                          style={{
-                            display: "block",
-                            fontSize: "13px"
-                          }}
-                        >
-                          {formatDate(
-                            invoice.created_at
-                          )}
-                        </strong>
-                      </div>
-                    </div>
-
-                    {/* DESCRIPTION */}
-                    {invoice.description && (
-                      <div
-                        style={{
-                          padding: "17px 20px 0"
-                        }}
-                      >
-                        <p
-                          style={{
-                            margin: "0 0 5px",
-                            color: "#94a3b8",
-                            fontSize: "10px",
-                            fontWeight: "700",
-                            textTransform:
-                              "uppercase"
-                          }}
-                        >
-                          Description
-                        </p>
-
-                        <p
-                          style={{
-                            margin: 0,
-                            color: "#475569",
-                            fontSize: "13px",
-                            lineHeight: "1.5"
-                          }}
-                        >
-                          {invoice.description}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* CHECKOUT */}
-                    <div
-                      style={{
-                        margin: "18px 20px 0",
-                        padding: "13px",
-                        borderRadius: "10px",
-                        background: "#f8fafc",
-                        border:
-                          "1px solid #e2e8f0"
-                      }}
-                    >
-                      <p
-                        style={{
-                          margin: "0 0 7px",
-                          color: "#94a3b8",
-                          fontSize: "10px",
-                          fontWeight: "700",
-                          textTransform:
-                            "uppercase"
-                        }}
-                      >
-                        Checkout Link
-                      </p>
-
-                      <a
-                        href={checkoutUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          display: "block",
-                          overflow: "hidden",
-                          textOverflow:
-                            "ellipsis",
-                          whiteSpace:
-                            "nowrap",
-                          color: "#2563eb",
-                          fontSize: "12px",
-                          textDecoration:
-                            "none"
-                        }}
-                      >
-                        {checkoutUrl}
-                      </a>
-                    </div>
-
-                    {/* ACTIONS */}
-                    <div
-                      style={{
-                        padding: "18px 20px 20px",
-                        display: "flex",
-                        gap: "9px",
-                        flexWrap: "wrap"
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() =>
-                          copyCheckoutLink(
-                            invoice
-                          )
-                        }
-                        style={{
-                          border: "1px solid #cbd5e1",
-                          background: "#ffffff",
-                          color: "#334155",
-                          borderRadius: "9px",
-                          padding:
-                            "9px 13px",
-                          cursor: "pointer",
-                          fontSize: "12px",
-                          fontWeight: "600"
-                        }}
-                      >
-                        {copiedInvoiceId ===
-                        invoice.id
-                          ? "✓ Copied"
-                          : "Copy checkout link"}
-                      </button>
-
-                      <a
-                        href={checkoutUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          display: "inline-flex",
-                          alignItems:
-                            "center",
-                          justifyContent:
-                            "center",
-                          borderRadius: "9px",
-                          padding:
-                            "9px 13px",
-                          background: "#2563eb",
-                          color: "#ffffff",
-                          fontSize: "12px",
-                          fontWeight: "600",
-                          textDecoration:
-                            "none"
-                        }}
-                      >
-                        Open checkout
-                      </a>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setQrInvoiceId(
-                            showQr
-                              ? null
-                              : invoice.id
-                          )
-                        }
-                        style={{
-                          border: "1px solid #cbd5e1",
-                          background: "#ffffff",
-                          color: "#334155",
-                          borderRadius: "9px",
-                          padding:
-                            "9px 13px",
-                          cursor: "pointer",
-                          fontSize: "12px",
-                          fontWeight: "600"
-                        }}
-                      >
-                        {showQr
-                          ? "Hide QR"
-                          : "Show QR"}
-                      </button>
-                    </div>
-
-                    {/* QR CODE */}
-                    {showQr && (
-                      <div
-                        style={{
-                          borderTop:
-                            "1px solid #e2e8f0",
-                          padding:
-                            "24px 20px 28px",
-                          textAlign: "center"
-                        }}
-                      >
-                        <p
-                          style={{
-                            margin:
-                              "0 0 15px",
-                            fontSize: "14px",
-                            fontWeight: "700"
-                          }}
-                        >
-                          Scan to pay
-                        </p>
-
-                        <div
-                          style={{
-                            display:
-                              "inline-flex",
-                            padding: "14px",
-                            background:
-                              "#ffffff",
-                            border:
-                              "1px solid #e2e8f0",
-                            borderRadius:
-                              "12px"
-                          }}
-                        >
-                          <QRCodeSVG
-                            value={
-                              checkoutUrl
-                            }
-                            size={220}
-                            level="M"
-                          />
-                        </div>
-
-                        <p
-                          style={{
-                            maxWidth:
-                              "500px",
-                            margin:
-                              "14px auto 0",
-                            color: "#64748b",
-                            fontSize: "11px",
-                            lineHeight:
-                              "1.5",
-                            wordBreak:
-                              "break-all"
-                          }}
-                        >
-                          {checkoutUrl}
-                        </p>
-                      </div>
-                    )}
-                  </article>
-                );
-              })}
+          {formError && (
+            <div style={{ marginTop: 16 }}>
+              <Alert tone="danger">{formError}</Alert>
             </div>
           )}
+
+          <div className="pq-actions" style={{ marginTop: 18 }}>
+            <Button type="submit" loading={creating}>
+              {creating ? "Creating…" : "Create invoice"}
+            </Button>
+            <Button variant="ghost" onClick={toggleForm} disabled={creating}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+
+      <div className="pq-toolbar">
+        <Segmented
+          label="Filter invoices"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: "all", label: "All", count: stats.counts.all },
+            { value: "pending", label: "Awaiting", count: stats.counts.pending },
+            { value: "paid", label: "Paid", count: stats.counts.paid },
+            { value: "closed", label: "Expired/failed", count: stats.counts.closed }
+          ]}
+        />
+        <input
+          className="pq-input"
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search invoice or customer"
+          aria-label="Search invoices"
+        />
       </div>
-    </section>
+
+      {listError && (
+        <div style={{ marginBottom: 14 }}>
+          <Alert tone="danger">
+            {listError}{" "}
+            <button
+              type="button"
+              className="pq-link"
+              style={{ background: "none", border: 0, padding: 0, font: "inherit", cursor: "pointer" }}
+              onClick={() => loadInvoices()}
+            >
+              Try again
+            </button>
+          </Alert>
+        </div>
+      )}
+
+      {loading && invoices.length === 0 && (
+        <div className="pq-list" aria-busy="true" aria-label="Loading invoices">
+          {[0, 1, 2].map((key) => (
+            <div key={key} className="pq-skel" style={{ height: 68, borderRadius: 14 }} />
+          ))}
+        </div>
+      )}
+
+      {!loading && !listError && invoices.length === 0 && (
+        <EmptyState
+          title="No invoices yet"
+          text="Create your first invoice and send the checkout link to your customer."
+        >
+          <Button onClick={toggleForm}>New invoice</Button>
+        </EmptyState>
+      )}
+
+      {invoices.length > 0 && visible.length === 0 && (
+        <EmptyState
+          title="No matching invoices"
+          text="Try a different filter or search."
+        >
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setFilter("all");
+              setQuery("");
+            }}
+          >
+            Clear filters
+          </Button>
+        </EmptyState>
+      )}
+
+      {visible.length > 0 && (
+        <div className="pq-list">
+          {visible.map((invoice) => {
+            const url = checkoutUrlFor(invoice);
+            const kind = bucket(invoice.status);
+            const expanded = openId === invoice.id;
+            const showQr = qrId === invoice.id;
+
+            return (
+              <article key={invoice.id} className="pq-item">
+                <button
+                  type="button"
+                  className="pq-item-head"
+                  aria-expanded={expanded}
+                  onClick={() => setOpenId(expanded ? null : invoice.id)}
+                >
+                  <span>
+                    <span className="pq-item-title">
+                      {invoice.invoice_number || invoice.id?.slice(0, 8)}
+                    </span>
+                    <br />
+                    <span className="pq-item-meta">
+                      {invoice.customer_name || "No customer"}
+                    </span>
+                  </span>
+                  <span className="pq-item-amt">
+                    {formatAmount(invoice.amount)} {invoice.currency || "USDC"}
+                  </span>
+                  <span>
+                    <StatusBadge status={invoice.status} />
+                  </span>
+                  <span className="pq-item-meta" style={{ textAlign: "right" }}>
+                    Due {formatDate(invoice.due_at)}
+                  </span>
+                </button>
+
+                {expanded && (
+                  <div className="pq-item-body">
+                    <dl className="pq-kv">
+                      <div>
+                        <dt>Customer</dt>
+                        <dd>
+                          {invoice.customer_name || "No customer"}
+                          {invoice.customer_email && (
+                            <>
+                              <br />
+                              <span className="pq-item-meta">{invoice.customer_email}</span>
+                            </>
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Due</dt>
+                        <dd>{formatDate(invoice.due_at)}</dd>
+                      </div>
+                      <div>
+                        <dt>Created</dt>
+                        <dd>{formatDate(invoice.created_at)}</dd>
+                      </div>
+                      {invoice.description && (
+                        <div>
+                          <dt>Description</dt>
+                          <dd>{invoice.description}</dd>
+                        </div>
+                      )}
+                    </dl>
+
+                    <div className="pq-linkbox">
+                      <small>{kind === "paid" ? "Receipt link" : "Checkout link"}</small>
+                      {url}
+                    </div>
+
+                    <div className="pq-actions">
+                      <CopyButton value={url} label="Copy link" />
+                      {typeof navigator !== "undefined" && navigator.share && (
+                        <Button variant="secondary" size="sm" onClick={() => share(invoice)}>
+                          Share
+                        </Button>
+                      )}
+                      <a
+                        className="pq-btn pq-primary pq-sm"
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {kind === "paid" ? "View receipt" : "Open checkout"}
+                      </a>
+                      {kind === "pending" && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => setQrId(showQr ? null : invoice.id)}
+                        >
+                          {showQr ? "Hide QR" : "Show QR"}
+                        </Button>
+                      )}
+                    </div>
+
+                    {showQr && kind === "pending" && (
+                      <div className="pq-qr">
+                        <div className="pq-qr-box">
+                          <QRCodeSVG value={url} size={200} level="M" />
+                        </div>
+                        <span className="pq-item-meta">Scan to open the checkout page</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </PageScope>
   );
 }
