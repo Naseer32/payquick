@@ -59,12 +59,18 @@ function checkoutUrlFor(invoice) {
   return `${window.location.origin}/pay/${encodeURIComponent(invoice.checkout_token)}`;
 }
 
-export default function Invoices({ merchant, darkMode = false }) {
+export default function Invoices({
+  merchant,
+  darkMode = false,
+  presetCustomerId = "",
+  onPresetUsed
+}) {
   const requestId = useRef(0);
 
   const [invoices, setInvoices] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [listError, setListError] = useState("");
   const [customerError, setCustomerError] = useState("");
 
@@ -95,6 +101,7 @@ export default function Invoices({ merchant, darkMode = false }) {
 
       if (id === requestId.current) {
         setInvoices(result.invoices || []);
+        setLoadedOnce(true);
       }
     } catch (err) {
       if (id === requestId.current && !silent) {
@@ -128,6 +135,18 @@ export default function Invoices({ merchant, darkMode = false }) {
     loadInvoices();
     loadCustomers();
   }, [merchant, loadInvoices, loadCustomers]);
+
+  // "Create invoice" on the Customers page lands here with that customer selected.
+  useEffect(() => {
+    if (!merchant || !presetCustomerId || !loadedOnce) return;
+
+    setCustomerId(presetCustomerId);
+    setInvoiceNumber((current) => current || nextInvoiceNumber(invoices));
+    setNotice("");
+    setFormError("");
+    setShowForm(true);
+    onPresetUsed?.();
+  }, [merchant, presetCustomerId, loadedOnce, invoices, onPresetUsed]);
 
   useEffect(() => {
     if (!merchant) return;

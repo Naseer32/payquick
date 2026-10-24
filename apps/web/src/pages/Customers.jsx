@@ -1,909 +1,484 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "../services/api.js";
+import {
+  Button,
+  Alert,
+  StatusBadge,
+  formatAmount,
+  friendlyError
+} from "../components/ui.jsx";
+import { PageScope, Field, EmptyState } from "../components/forms.jsx";
 
-export default function Customers({ merchant, darkMode = false }) {
-  const loadCustomersRequestId = useRef(0);
+const PAID = ["paid", "confirmed"];
+const PENDING = ["pending", "processing"];
+
+function initials(customer) {
+  const value = (customer.name || customer.email || "C").trim();
+  const parts = value.split(/\s+/);
+
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+
+  return value.slice(0, 2).toUpperCase();
+}
+
+function formatDate(value) {
+  if (!value) return "Unknown";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "Unknown";
+
+  return date.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+export default function Customers({
+  merchant,
+  darkMode = false,
+  onCreateInvoice
+}) {
+  const listRequestId = useRef(0);
   const historyRequestIds = useRef({});
 
   const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState("");
+
+  const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState("");
-  const [historyByCustomer, setHistoryByCustomer] = useState({});
-  const [loadingHistoryId, setLoadingHistoryId] = useState(null);
+  const [formError, setFormError] = useState("");
+  const [notice, setNotice] = useState("");
 
-  async function loadCustomers() {
-    const requestId = ++loadCustomersRequestId.current;
+  const [query, setQuery] = useState("");
+  const [openId, setOpenId] = useState(null);
+  const [history, setHistory] = useState({});
+  const [historyLoading, setHistoryLoading] = useState({});
+  const [historyError, setHistoryError] = useState({});
+
+  const loadCustomers = useCallback(async () => {
+    const id = ++listRequestId.current;
 
     setLoading(true);
-    setError("");
+    setListError("");
 
     try {
       const result = await apiRequest("/api/customers");
 
-      if (requestId === loadCustomersRequestId.current) {
+      if (id === listRequestId.current) {
         setCustomers(result.customers || []);
       }
     } catch (err) {
-      if (requestId === loadCustomersRequestId.current) {
-        setError(err.message || "Unable to load customers.");
+      if (id === listRequestId.current) {
+        setListError(friendlyError(err));
       }
     } finally {
-      if (requestId === loadCustomersRequestId.current) {
+      if (id === listRequestId.current) {
         setLoading(false);
       }
     }
-  }
+  }, []);
 
   useEffect(() => {
     if (!merchant) {
       setCustomers([]);
-      setHistoryByCustomer({});
+      setHistory({});
+      setOpenId(null);
       return;
     }
 
     loadCustomers();
-  }, [merchant]);
+  }, [merchant, loadCustomers]);
 
-  async function handleViewHistory(customerId) {
-    const requestId =
-      (historyRequestIds.current[customerId] || 0) + 1;
+  const loadHistory = useCallback(async (customerId) => {
+    const id = (historyRequestIds.current[customerId] || 0) + 1;
+    historyRequestIds.current[customerId] = id;
 
-    historyRequestIds.current[customerId] = requestId;
-
-    setLoadingHistoryId(customerId);
-    setError("");
+    setHistoryLoading((prev) => ({ ...prev, [customerId]: true }));
+    setHistoryError((prev) => ({ ...prev, [customerId]: "" }));
 
     try {
       const result = await apiRequest(
-        `/api/customers/${customerId}/payments`
+        `/api/customers/${encodeURIComponent(customerId)}/payments`
       );
 
-      if (historyRequestIds.current[customerId] === requestId) {
-        setHistoryByCustomer((prev) => ({
-          ...prev,
-          [customerId]: result.history || []
-        }));
+      if (historyRequestIds.current[customerId] === id) {
+        setHistory((prev) => ({ ...prev, [customerId]: result.history || [] }));
       }
     } catch (err) {
-      if (historyRequestIds.current[customerId] === requestId) {
-        setError(
-          err.message || "Unable to load customer history."
-        );
+      if (historyRequestIds.current[customerId] === id) {
+        setHistoryError((prev) => ({ ...prev, [customerId]: friendlyError(err) }));
       }
     } finally {
-      if (historyRequestIds.current[customerId] === requestId) {
-        setLoadingHistoryId(null);
+      if (historyRequestIds.current[customerId] === id) {
+        setHistoryLoading((prev) => ({ ...prev, [customerId]: false }));
       }
+    }
+  }, []);
+
+  function toggleCustomer(customer) {
+    if (openId === customer.id) {
+      setOpenId(null);
+      return;
+    }
+
+    setOpenId(customer.id);
+
+    if (history[customer.id] === undefined) {
+      loadHistory(customer.id);
     }
   }
 
-  async function handleCreateCustomer(event) {
+  function toggleForm() {
+    setNotice("");
+    setFormError("");
+    setShowForm((value) => !value);
+  }
+
+  async function handleCreate(event) {
     event.preventDefault();
 
+    setFormError("");
+    setNotice("");
+
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+
+    if (!cleanName && !cleanEmail) {
+      setFormError("Enter a name or an email address.");
+      return;
+    }
+
+    if (
+      cleanEmail &&
+      customers.some(
+        (customer) =>
+          String(customer.email || "").toLowerCase() === cleanEmail.toLowerCase()
+      )
+    ) {
+      setFormError("A customer with this email already exists.");
+      return;
+    }
+
     setCreating(true);
-    setError("");
 
     try {
       await apiRequest("/api/customers", {
         method: "POST",
-        body: JSON.stringify({
-          name,
-          email
-        })
+        body: JSON.stringify({ name: cleanName, email: cleanEmail })
       });
 
+      setNotice(`${cleanName || cleanEmail} was added.`);
       setName("");
       setEmail("");
+      setShowForm(false);
 
       await loadCustomers();
     } catch (err) {
-      setError(
-        err.message || "Unable to create customer."
-      );
+      setFormError(friendlyError(err));
     } finally {
       setCreating(false);
     }
   }
 
-  function getInitials(customer) {
-    const value =
-      customer.name ||
-      customer.email ||
-      "C";
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
 
-    const parts = value.trim().split(/\s+/);
+    if (!needle) return customers;
 
-    if (parts.length >= 2) {
-      return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-    }
-
-    return value.slice(0, 2).toUpperCase();
-  }
-
-  function formatDate(dateValue) {
-    if (!dateValue) return "Unknown";
-
-    const date = new Date(dateValue);
-
-    if (Number.isNaN(date.getTime())) {
-      return "Unknown";
-    }
-
-    return date.toLocaleDateString(undefined, {
-      day: "2-digit",
-      month: "short",
-      year: "numeric"
-    });
-  }
-
-  function formatAmount(amount) {
-    return Number(amount || 0).toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2
-    });
-  }
-
-  function getStatusStyle(status) {
-    const normalized = String(
-      status || ""
-    ).toLowerCase();
-
-    if (
-      normalized === "paid" ||
-      normalized === "confirmed"
-    ) {
-      return {
-        background: theme.greenSoft,
-        color: theme.green
-      };
-    }
-
-    if (
-      normalized === "pending" ||
-      normalized === "processing"
-    ) {
-      return {
-        background: theme.amberSoft,
-        color: theme.amber
-      };
-    }
-
-    if (
-      normalized === "failed" ||
-      normalized === "cancelled" ||
-      normalized === "expired"
-    ) {
-      return {
-        background: theme.redSoft,
-        color: theme.red
-      };
-    }
-
-    return {
-      background: theme.primarySoft,
-      color: theme.primary
-    };
-  }
-
-  const theme = darkMode
-    ? {
-        background: "#0a0e1a",
-        card: "#111827",
-        cardHover: "#172033",
-        text: "#f8fafc",
-        muted: "#94a3b8",
-        border: "#263244",
-        primary: "#3b82f6",
-        primarySoft: "rgba(59, 130, 246, 0.12)",
-        green: "#10b981",
-        greenSoft: "rgba(16, 185, 129, 0.12)",
-        amber: "#f59e0b",
-        amberSoft: "rgba(245, 158, 11, 0.12)",
-        red: "#ef4444",
-        redSoft: "rgba(239, 68, 68, 0.12)"
-      }
-    : {
-        background: "#f8fafc",
-        card: "#ffffff",
-        cardHover: "#f8fafc",
-        text: "#0f172a",
-        muted: "#64748b",
-        border: "#e2e8f0",
-        primary: "#2563eb",
-        primarySoft: "rgba(37, 99, 235, 0.08)",
-        green: "#059669",
-        greenSoft: "rgba(5, 150, 105, 0.08)",
-        amber: "#d97706",
-        amberSoft: "rgba(217, 119, 6, 0.08)",
-        red: "#dc2626",
-        redSoft: "rgba(220, 38, 38, 0.08)"
-      };
-
-  const cardStyle = {
-    background: theme.card,
-    border: `1px solid ${theme.border}`,
-    borderRadius: "16px",
-    boxSizing: "border-box"
-  };
+    return customers.filter((customer) =>
+      [customer.name, customer.email]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(needle))
+    );
+  }, [customers, query]);
 
   if (!merchant) {
     return (
-      <section
-        style={{
-          minHeight: "calc(100vh - 120px)",
-          padding: "40px 20px",
-          color: theme.text
-        }}
-      >
-        <div
-          style={{
-            maxWidth: "560px",
-            margin: "80px auto"
-          }}
-        >
-          <div
-            style={{
-              ...cardStyle,
-              textAlign: "center",
-              padding: "50px 30px"
-            }}
-          >
-            <div
-              style={{
-                width: "68px",
-                height: "68px",
-                margin: "0 auto 20px",
-                borderRadius: "18px",
-                background: theme.primary,
-                color: "#ffffff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "27px",
-                fontWeight: "800"
-              }}
-            >
-              C
-            </div>
-
-            <h2
-              style={{
-                margin: "0 0 10px",
-                fontSize: "27px"
-              }}
-            >
-              Customers
-            </h2>
-
-            <p
-              style={{
-                margin: 0,
-                color: theme.muted,
-                fontSize: "14px",
-                lineHeight: "1.6"
-              }}
-            >
-              Connect your wallet to manage your
-              customers and view their payment history.
-            </p>
-          </div>
-        </div>
-      </section>
+      <PageScope dark={darkMode}>
+        <EmptyState
+          title="Connect your wallet"
+          text="Connect your wallet to manage customers and see their payment history."
+        />
+      </PageScope>
     );
   }
 
   return (
-    <section
-      style={{
-        minHeight: "calc(100vh - 120px)",
-        padding: "30px 20px 50px",
-        color: theme.text,
-        boxSizing: "border-box"
-      }}
-    >
-      <div
-        style={{
-          maxWidth: "1120px",
-          margin: "0 auto"
-        }}
-      >
-        {/* HEADER */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: "20px",
-            marginBottom: "26px",
-            flexWrap: "wrap"
-          }}
-        >
-          <div>
-            <p
-              style={{
-                margin: "0 0 6px",
-                color: theme.muted,
-                fontSize: "13px",
-                fontWeight: "500"
-              }}
-            >
-              Merchant dashboard
-            </p>
-
-            <h1
-              style={{
-                margin: 0,
-                fontSize: "30px",
-                lineHeight: "1.2",
-                letterSpacing: "-0.7px"
-              }}
-            >
-              Customers
-            </h1>
-
-            <p
-              style={{
-                margin: "8px 0 0",
-                color: theme.muted,
-                fontSize: "14px"
-              }}
-            >
-              Manage customers and view their payment history.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={loadCustomers}
-            disabled={loading}
-            style={{
-              border: `1px solid ${theme.border}`,
-              background: theme.card,
-              color: theme.text,
-              borderRadius: "10px",
-              padding: "10px 14px",
-              cursor: loading ? "not-allowed" : "pointer",
-              fontSize: "13px",
-              fontWeight: "600"
-            }}
-          >
-            {loading ? "Loading..." : "Refresh"}
-          </button>
+    <PageScope dark={darkMode}>
+      <div className="pq-head">
+        <div>
+          <h1 className="pq-h1">Customers</h1>
+          <p className="pq-sub">
+            {customers.length} {customers.length === 1 ? "customer" : "customers"}.
+            Add them here, then pick them when you create an invoice.
+          </p>
         </div>
+        <Button onClick={toggleForm} variant={showForm ? "secondary" : "primary"}>
+          {showForm ? "Close" : "Add customer"}
+        </Button>
+      </div>
 
-        {/* ADD CUSTOMER */}
-        <div
-          style={{
-            ...cardStyle,
-            padding: "22px",
-            marginBottom: "24px"
-          }}
-        >
-          <div style={{ marginBottom: "18px" }}>
-            <h2
-              style={{
-                margin: 0,
-                fontSize: "18px"
-              }}
-            >
-              Add Customer
-            </h2>
-
-            <p
-              style={{
-                margin: "5px 0 0",
-                color: theme.muted,
-                fontSize: "12px"
-              }}
-            >
-              Create a customer record for your invoices.
-            </p>
-          </div>
-
-          <form onSubmit={handleCreateCustomer}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: "14px",
-                alignItems: "end"
-              }}
-            >
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "7px",
-                  color: theme.muted,
-                  fontSize: "12px",
-                  fontWeight: "600"
-                }}
-              >
-                Name
-
-                <input
-                  value={name}
-                  onChange={(event) =>
-                    setName(event.target.value)
-                  }
-                  placeholder="Customer name"
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    border: `1px solid ${theme.border}`,
-                    background: theme.background,
-                    color: theme.text,
-                    borderRadius: "10px",
-                    padding: "11px 12px",
-                    outline: "none",
-                    fontSize: "14px"
-                  }}
-                />
-              </label>
-
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "7px",
-                  color: theme.muted,
-                  fontSize: "12px",
-                  fontWeight: "600"
-                }}
-              >
-                Email
-
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) =>
-                    setEmail(event.target.value)
-                  }
-                  placeholder="customer@example.com"
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    border: `1px solid ${theme.border}`,
-                    background: theme.background,
-                    color: theme.text,
-                    borderRadius: "10px",
-                    padding: "11px 12px",
-                    outline: "none",
-                    fontSize: "14px"
-                  }}
-                />
-              </label>
-
-              <button
-                type="submit"
-                disabled={creating}
-                style={{
-                  border: "none",
-                  background: theme.primary,
-                  color: "#ffffff",
-                  borderRadius: "10px",
-                  padding: "12px 18px",
-                  cursor: creating
-                    ? "not-allowed"
-                    : "pointer",
-                  fontSize: "13px",
-                  fontWeight: "700",
-                  minHeight: "42px"
-                }}
-              >
-                {creating ? "Adding..." : "Add Customer"}
-              </button>
-            </div>
-          </form>
-        </div>
-
-        {/* ERROR */}
-        {error && (
-          <div
-            role="alert"
-            style={{
-              ...cardStyle,
-              padding: "14px 16px",
-              marginBottom: "20px",
-              borderColor: theme.red,
-              background: theme.redSoft
-            }}
-          >
-            <span
-              style={{
-                color: theme.red,
-                fontSize: "13px"
-              }}
-            >
-              {error}
-            </span>
+      <div aria-live="polite">
+        {notice && (
+          <div style={{ marginBottom: 16 }}>
+            <Alert tone="success">{notice}</Alert>
           </div>
         )}
+      </div>
 
-        {/* CUSTOMER LIST */}
-        <div
-          style={{
-            ...cardStyle,
-            overflow: "hidden"
-          }}
-        >
-          <div
-            style={{
-              padding: "20px",
-              borderBottom: `1px solid ${theme.border}`,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: "15px"
-            }}
-          >
-            <div>
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "18px"
-                }}
-              >
-                Customer List
-              </h2>
+      {showForm && (
+        <form className="pq-panel" onSubmit={handleCreate}>
+          <h2 className="pq-h2" style={{ marginBottom: 16 }}>New customer</h2>
 
-              <p
-                style={{
-                  margin: "5px 0 0",
-                  color: theme.muted,
-                  fontSize: "12px"
-                }}
-              >
-                {customers.length}{" "}
-                {customers.length === 1
-                  ? "customer"
-                  : "customers"}
-              </p>
-            </div>
+          <div className="pq-form-grid">
+            <Field label="Name">
+              <input
+                className="pq-input"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Customer name"
+                autoComplete="off"
+              />
+            </Field>
+
+            <Field label="Email">
+              <input
+                className="pq-input"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="customer@example.com"
+                autoComplete="off"
+              />
+            </Field>
           </div>
 
-          {loading ? (
-            <div
-              style={{
-                padding: "45px 20px",
-                textAlign: "center",
-                color: theme.muted,
-                fontSize: "14px"
-              }}
-            >
-              Loading customers...
-            </div>
-          ) : customers.length === 0 ? (
-            <div
-              style={{
-                padding: "50px 20px",
-                textAlign: "center"
-              }}
-            >
-              <div
-                style={{
-                  width: "52px",
-                  height: "52px",
-                  margin: "0 auto 15px",
-                  borderRadius: "14px",
-                  background: theme.primarySoft,
-                  color: theme.primary,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "22px",
-                  fontWeight: "700"
-                }}
-              >
-                C
-              </div>
-
-              <strong
-                style={{
-                  display: "block",
-                  fontSize: "15px",
-                  marginBottom: "6px"
-                }}
-              >
-                No customers yet
-              </strong>
-
-              <span
-                style={{
-                  color: theme.muted,
-                  fontSize: "13px"
-                }}
-              >
-                Add your first customer above.
-              </span>
-            </div>
-          ) : (
-            <div>
-              {customers.map((customer) => {
-                const history =
-                  historyByCustomer[customer.id];
-
-                const historyOpen =
-                  history !== undefined;
-
-                const isLoadingHistory =
-                  loadingHistoryId === customer.id;
-
-                return (
-                  <article
-                    key={customer.id}
-                    style={{
-                      padding: "19px 20px",
-                      borderBottom: `1px solid ${theme.border}`
-                    }}
-                  >
-                    {/* CUSTOMER ROW */}
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: "18px",
-                        flexWrap: "wrap"
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "13px",
-                          minWidth: 0
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: "42px",
-                            height: "42px",
-                            flexShrink: 0,
-                            borderRadius: "12px",
-                            background: theme.primarySoft,
-                            color: theme.primary,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: "13px",
-                            fontWeight: "800"
-                          }}
-                        >
-                          {getInitials(customer)}
-                        </div>
-
-                        <div
-                          style={{
-                            minWidth: 0
-                          }}
-                        >
-                          <strong
-                            style={{
-                              display: "block",
-                              fontSize: "14px",
-                              marginBottom: "4px"
-                            }}
-                          >
-                            {customer.name ||
-                              "Unnamed customer"}
-                          </strong>
-
-                          <span
-                            style={{
-                              color: theme.muted,
-                              fontSize: "12px",
-                              wordBreak: "break-word"
-                            }}
-                          >
-                            {customer.email ||
-                              "No email address"}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "12px"
-                        }}
-                      >
-                        <span
-                          style={{
-                            color: theme.muted,
-                            fontSize: "11px"
-                          }}
-                        >
-                          Added{" "}
-                          {formatDate(
-                            customer.created_at
-                          )}
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleViewHistory(
-                              customer.id
-                            )
-                          }
-                          disabled={isLoadingHistory}
-                          style={{
-                            border: `1px solid ${theme.border}`,
-                            background: historyOpen
-                              ? theme.primarySoft
-                              : theme.card,
-                            color: historyOpen
-                              ? theme.primary
-                              : theme.text,
-                            borderRadius: "9px",
-                            padding: "8px 12px",
-                            cursor: isLoadingHistory
-                              ? "not-allowed"
-                              : "pointer",
-                            fontSize: "12px",
-                            fontWeight: "600"
-                          }}
-                        >
-                          {isLoadingHistory
-                            ? "Loading..."
-                            : historyOpen
-                            ? "Refresh History"
-                            : "View History"}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* PAYMENT HISTORY */}
-                    {historyOpen && (
-                      <div
-                        style={{
-                          marginTop: "18px",
-                          marginLeft: "55px",
-                          border: `1px solid ${theme.border}`,
-                          borderRadius: "12px",
-                          overflow: "hidden"
-                        }}
-                      >
-                        <div
-                          style={{
-                            padding: "13px 15px",
-                            background: theme.background,
-                            borderBottom: `1px solid ${theme.border}`,
-                            fontSize: "12px",
-                            fontWeight: "700"
-                          }}
-                        >
-                          Payment History
-                        </div>
-
-                        {history.length === 0 ? (
-                          <div
-                            style={{
-                              padding: "20px 15px",
-                              color: theme.muted,
-                              fontSize: "12px"
-                            }}
-                          >
-                            No invoices for this customer yet.
-                          </div>
-                        ) : (
-                          <div>
-                            {history.map((item) => {
-                              const invoiceStatus =
-                                getStatusStyle(
-                                  item.invoice_status
-                                );
-
-                              return (
-                                <div
-                                  key={item.invoice_id}
-                                  style={{
-                                    padding: "15px",
-                                    borderBottom: `1px solid ${theme.border}`,
-                                    display: "flex",
-                                    justifyContent:
-                                      "space-between",
-                                    alignItems: "center",
-                                    gap: "15px",
-                                    flexWrap: "wrap"
-                                  }}
-                                >
-                                  <div>
-                                    <strong
-                                      style={{
-                                        display: "block",
-                                        fontSize: "13px",
-                                        marginBottom: "5px"
-                                      }}
-                                    >
-                                      {item.invoice_number}
-                                    </strong>
-
-                                    <span
-                                      style={{
-                                        color: theme.muted,
-                                        fontSize: "11px"
-                                      }}
-                                    >
-                                      {formatAmount(
-                                        item.amount
-                                      )}{" "}
-                                      {item.currency ||
-                                        "USDC"}
-                                    </span>
-                                  </div>
-
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      alignItems: "center",
-                                      gap: "8px",
-                                      flexWrap: "wrap"
-                                    }}
-                                  >
-                                    <span
-                                      style={{
-                                        ...invoiceStatus,
-                                        borderRadius:
-                                          "999px",
-                                        padding:
-                                          "5px 9px",
-                                        fontSize: "10px",
-                                        fontWeight: "700",
-                                        textTransform:
-                                          "capitalize"
-                                      }}
-                                    >
-                                      Invoice:{" "}
-                                      {item.invoice_status ||
-                                        "unknown"}
-                                    </span>
-
-                                    {item.payment_status && (
-                                      <span
-                                        style={{
-                                          ...getStatusStyle(
-                                            item.payment_status
-                                          ),
-                                          borderRadius:
-                                            "999px",
-                                          padding:
-                                            "5px 9px",
-                                          fontSize:
-                                            "10px",
-                                          fontWeight:
-                                            "700",
-                                          textTransform:
-                                            "capitalize"
-                                        }}
-                                      >
-                                        Payment:{" "}
-                                        {
-                                          item.payment_status
-                                        }
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </article>
-                );
-              })}
+          {formError && (
+            <div style={{ marginTop: 16 }}>
+              <Alert tone="danger">{formError}</Alert>
             </div>
           )}
+
+          <div className="pq-actions" style={{ marginTop: 18 }}>
+            <Button type="submit" loading={creating}>
+              {creating ? "Adding…" : "Add customer"}
+            </Button>
+            <Button variant="ghost" onClick={toggleForm} disabled={creating}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {customers.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <input
+            className="pq-input"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search by name or email"
+            aria-label="Search customers"
+          />
         </div>
-      </div>
-    </section>
+      )}
+
+      {listError && (
+        <div style={{ marginBottom: 14 }}>
+          <Alert tone="danger">
+            {listError}{" "}
+            <button
+              type="button"
+              className="pq-link"
+              style={{ background: "none", border: 0, padding: 0, font: "inherit", cursor: "pointer" }}
+              onClick={loadCustomers}
+            >
+              Try again
+            </button>
+          </Alert>
+        </div>
+      )}
+
+      {loading && customers.length === 0 && (
+        <div className="pq-list" aria-busy="true" aria-label="Loading customers">
+          {[0, 1, 2].map((key) => (
+            <div key={key} className="pq-skel" style={{ height: 68, borderRadius: 14 }} />
+          ))}
+        </div>
+      )}
+
+      {!loading && !listError && customers.length === 0 && (
+        <EmptyState
+          title="No customers yet"
+          text="Add a customer to link them to invoices and track what they've paid."
+        >
+          <Button onClick={toggleForm}>Add customer</Button>
+        </EmptyState>
+      )}
+
+      {customers.length > 0 && visible.length === 0 && (
+        <EmptyState title="No matching customers" text="Try a different name or email.">
+          <Button variant="secondary" onClick={() => setQuery("")}>
+            Clear search
+          </Button>
+        </EmptyState>
+      )}
+
+      {visible.length > 0 && (
+        <div className="pq-list">
+          {visible.map((customer) => {
+            const expanded = openId === customer.id;
+            const items = history[customer.id];
+            const busy = historyLoading[customer.id];
+            const failed = historyError[customer.id];
+
+            let paid = 0;
+            let open = 0;
+
+            (items || []).forEach((item) => {
+              const status = String(item.invoice_status || "").toLowerCase();
+              if (PAID.includes(status)) paid += Number(item.amount || 0);
+              if (PENDING.includes(status)) open += Number(item.amount || 0);
+            });
+
+            return (
+              <article key={customer.id} className="pq-item">
+                <button
+                  type="button"
+                  className="pq-item-head"
+                  aria-expanded={expanded}
+                  onClick={() => toggleCustomer(customer)}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: 40,
+                        height: 40,
+                        flex: "none",
+                        borderRadius: 12,
+                        background: "var(--pq-infoBg)",
+                        color: "var(--pq-info)",
+                        display: "grid",
+                        placeItems: "center",
+                        fontSize: 13,
+                        fontWeight: 800
+                      }}
+                    >
+                      {initials(customer)}
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span className="pq-item-title">
+                        {customer.name || "Unnamed customer"}
+                      </span>
+                      <br />
+                      <span className="pq-item-meta">
+                        {customer.email || "No email address"}
+                      </span>
+                    </span>
+                  </span>
+                  <span className="pq-item-meta" style={{ textAlign: "right" }}>
+                    {expanded ? "Hide" : "Payments"}
+                  </span>
+                </button>
+
+                {expanded && (
+                  <div className="pq-item-body">
+                    <dl className="pq-kv">
+                      <div>
+                        <dt>Added</dt>
+                        <dd>{formatDate(customer.created_at)}</dd>
+                      </div>
+                      {items && (
+                        <>
+                          <div>
+                            <dt>Paid</dt>
+                            <dd className="pq-num">{formatAmount(paid)} USDC</dd>
+                          </div>
+                          <div>
+                            <dt>Awaiting payment</dt>
+                            <dd className="pq-num">{formatAmount(open)} USDC</dd>
+                          </div>
+                        </>
+                      )}
+                    </dl>
+
+                    {busy && !items && (
+                      <div className="pq-skel" style={{ height: 56, borderRadius: 10 }} />
+                    )}
+
+                    {failed && <Alert tone="danger">{failed}</Alert>}
+
+                    {items && items.length === 0 && (
+                      <p className="pq-item-meta" style={{ margin: 0 }}>
+                        No invoices for this customer yet.
+                      </p>
+                    )}
+
+                    {items && items.length > 0 && (
+                      <div>
+                        {items.map((item) => (
+                          <div
+                            key={item.invoice_id}
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: 12,
+                              flexWrap: "wrap",
+                              padding: "12px 0",
+                              borderTop: "1px solid var(--pq-border)"
+                            }}
+                          >
+                            <span>
+                              <strong style={{ fontSize: 14 }}>{item.invoice_number}</strong>
+                              <br />
+                              <span className="pq-item-meta pq-num">
+                                {formatAmount(item.amount)} {item.currency || "USDC"}
+                              </span>
+                            </span>
+                            <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              <StatusBadge status={item.invoice_status} />
+                              {item.payment_status && (
+                                <span className="pq-item-meta" style={{ alignSelf: "center" }}>
+                                  Payment: {item.payment_status}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="pq-actions">
+                      {onCreateInvoice && (
+                        <Button size="sm" onClick={() => onCreateInvoice(customer.id)}>
+                          Create invoice
+                        </Button>
+                      )}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={busy}
+                        onClick={() => loadHistory(customer.id)}
+                      >
+                        Refresh payments
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </PageScope>
   );
 }

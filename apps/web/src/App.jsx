@@ -11,6 +11,7 @@ import WalletButton from "./components/WalletButton.jsx";
 
 export default function App() {
   const [merchant, setMerchant] = useState(null);
+  const [invoiceCustomerId, setInvoiceCustomerId] = useState("");
   const [activeSection, setActiveSection] = useState(() => {
     const path = window.location.pathname;
 
@@ -238,6 +239,8 @@ export default function App() {
         <Invoices
           merchant={merchant}
           darkMode={darkMode}
+          presetCustomerId={invoiceCustomerId}
+          onPresetUsed={() => setInvoiceCustomerId("")}
         />
       );
 
@@ -254,6 +257,10 @@ export default function App() {
         <Customers
           merchant={merchant}
           darkMode={darkMode}
+          onCreateInvoice={(id) => {
+            setInvoiceCustomerId(id);
+            handleNavigation("invoices");
+          }}
         />
       );
 
