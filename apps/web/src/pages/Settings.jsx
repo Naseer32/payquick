@@ -14,11 +14,11 @@ import {
 } from "../components/ui.jsx";
 import { PageScope, Field, EmptyState } from "../components/forms.jsx";
 
-// Arc's native currency is USDC with 6 decimal places (confirmed on-chain via
-// decimals() on 0x3600000000000000000000000000000000000000).
-// Using 18 here causes a 10^12 overflow: a 25 USDC withdrawal would attempt
-// to send 25,000,000,000,000 USDC. Must match blockchain.js and Checkout.jsx.
-const NATIVE_DECIMALS = 6;
+// Arc's eth_getBalance and tx `value` field use 18-decimal wei (same as
+// Ethereum). This must match blockchain.js (ARC_NATIVE_DECIMALS = 18) and
+// Checkout.jsx. The ERC-20 decimals() value of 6 applies only to balanceOf
+// calls, not to native transfers or eth_getBalance.
+const NATIVE_DECIMALS = 18;
 const AMOUNT_PATTERN = /^\d+(\.\d{1,6})?$/;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 

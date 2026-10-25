@@ -262,20 +262,23 @@ describe("Input validation – wallet address format", () => {
 });
 
 describe("Arc Testnet decimal constants", () => {
-  it("Arc native USDC has 6 decimals (not 18)", () => {
-    const ARC_NATIVE_DECIMALS = 6;
-    // 25 USDC at 6 decimals = 25_000_000
-    const amount = BigInt(Math.round(25 * 10 ** ARC_NATIVE_DECIMALS));
-    assert.equal(amount, 25_000_000n);
+  // Arc's eth_getBalance and tx value field use 18-decimal wei (same as Ethereum).
+  // Confirmed empirically: a real wallet returned 0x423087730cf559f000 from
+  // eth_getBalance. Divided by 1e18 = 1220.98 USDC (realistic).
+  // Divided by 1e6 = 1,220,981,999,000,000 (the overflow bug shown in UI).
+  it("Arc eth_getBalance uses 18-decimal wei — dividing by 1e18 gives correct USDC", () => {
+    const RAW_HEX = BigInt("0x423087730cf559f000"); // real RPC response
+    const divided18 = Number(RAW_HEX) / 1e18;
+    const divided6  = Number(RAW_HEX) / 1e6;
+    // 18 decimals gives a realistic wallet balance (~1220 USDC)
+    assert.ok(divided18 > 1000 && divided18 < 10000, `Expected ~1220, got ${divided18}`);
+    // 6 decimals gives the overflow shown in the UI (>1e12)
+    assert.ok(divided6 > 1e12, `Expected overflow >1e12, got ${divided6}`);
   });
 
-  it("25 USDC at incorrect 18 decimals would be 10^12 times too large", () => {
-    // Use BigInt arithmetic directly to avoid floating-point precision loss at 10^18
-    const ARC_NATIVE_DECIMALS = 6;
-    const WRONG_DECIMALS = 18n;
-    const amount18 = 25n * (10n ** WRONG_DECIMALS);       // 25_000_000_000_000_000_000
-    const amount6  = BigInt(Math.round(25 * 10 ** ARC_NATIVE_DECIMALS)); // 25_000_000
-    // The 18-decimal amount is exactly 10^12 times larger
-    assert.equal(amount18 / amount6, 1_000_000_000_000n);
+  it("25 USDC native transfer value at 18 decimals = 25_000_000_000_000_000_000n", () => {
+    const ARC_NATIVE_DECIMALS = 18n;
+    const amount = 25n * (10n ** ARC_NATIVE_DECIMALS);
+    assert.equal(amount, 25_000_000_000_000_000_000n);
   });
 });

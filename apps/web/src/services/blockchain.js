@@ -3,20 +3,23 @@
  *
  * Browser-side blockchain helpers.
  *
- * Conflict resolution:
- *  - Remote updated rpcUrls to rpc.testnet.arc.io (correct) — kept.
- *  - Remote set nativeCurrency.decimals = 18 — REVERTED to 6.
- *    Arc's native currency is USDC with 6 decimals, not 18. Using 18 decimals
- *    causes a 10^12 overflow on every balance read and transfer (audit finding).
- *  - Audit fix: getNativeBalance and sendNativeTransfer use 6 decimals.
- *  - Removed production debug console.log calls.
+ * Arc native USDC decimal note:
+ *  - eth_getBalance (used by getNativeBalance) returns values in 18-decimal
+ *    wei format, identical to Ethereum. Divide by 10^18 to get a human-readable
+ *    USDC amount. Confirmed empirically: a ~1220 USDC wallet returns
+ *    0x423087730cf559f000 (≈1.22e21), which divided by 1e18 = 1220.98 USDC.
+ *  - ERC-20 balanceOf (not used here) uses 6 decimals.
+ *  - parseUnits for sendTransaction value must also use 18 to match what the
+ *    RPC expects in the `value` field.
+ *  - wallet_addEthereumChain nativeCurrency.decimals must be 18 so MetaMask
+ *    displays the correct human-readable amount.
  */
 
 const ARC_TESTNET_CHAIN_ID = 5042002;
 const ARC_TESTNET_CHAIN_ID_HEX = "0x4cef52";
 
-// Arc's native currency is USDC. It uses 6 decimal places, not 18.
-const ARC_NATIVE_DECIMALS = 6;
+// eth_getBalance and tx `value` field use 18-decimal wei on Arc Testnet.
+const ARC_NATIVE_DECIMALS = 18;
 
 const ARC_TESTNET_CONFIG = {
   chainId: ARC_TESTNET_CHAIN_ID_HEX,
@@ -121,7 +124,7 @@ export async function getNativeBalance(walletAddress) {
     params: [walletAddress, "latest"]
   });
 
-  // Arc native USDC has 6 decimals (not 18).
+  // eth_getBalance returns 18-decimal wei on Arc Testnet (same as Ethereum).
   const balanceRaw = BigInt(balanceHex);
   const divisor = BigInt(10) ** BigInt(ARC_NATIVE_DECIMALS);
   const whole = balanceRaw / divisor;
@@ -138,8 +141,7 @@ export async function sendNativeTransfer(fromAddress, toAddress, amount) {
   if (!toAddress) throw new Error("Recipient address is required.");
   if (!amount || Number(amount) <= 0) throw new Error("Enter a valid amount to send.");
 
-  // Arc native USDC has 6 decimals (not 18). Using 18 would send 10^12 times
-  // too much on every transfer — a critical financial error.
+  // tx `value` field uses 18-decimal wei on Arc Testnet, matching eth_getBalance.
   const amountInBaseUnits = BigInt(Math.round(Number(amount) * 10 ** ARC_NATIVE_DECIMALS));
   const amountHex = "0x" + amountInBaseUnits.toString(16);
 

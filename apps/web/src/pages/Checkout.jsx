@@ -19,9 +19,9 @@ const PAYMENT_TRACKER_ABI = [
   "function sendPayment(address to, string memo) external payable"
 ];
 
-// Arc's native USDC uses 6 decimals (not 18). Using 18 causes a 10^12 overflow on every
-// payment — a critical financial error. The correct value is 6.
-const NATIVE_DECIMALS = 6;
+// Arc's eth_getBalance and tx `value` field use 18-decimal wei (same as Ethereum).
+// The ERC-20 decimals() value is 6, but native transfers and parseUnits use 18.
+const NATIVE_DECIMALS = 18;
 
 const storageKey = (token) => `payquick_tx_${token}`;
 
