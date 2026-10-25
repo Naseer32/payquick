@@ -142,3 +142,20 @@ CREATE TABLE api_keys (
 
 CREATE INDEX api_keys_merchant_id_idx ON api_keys(merchant_id);
 CREATE INDEX api_keys_key_hash_idx ON api_keys(key_hash);
+
+-- ── Row Level Security ───────────────────────────────────────────────────────
+-- All tables are accessed exclusively via the API's direct DATABASE_URL
+-- connection (not PostgREST). Enabling RLS on every table ensures that
+-- Supabase anon/authenticated keys cannot bypass the API and query data
+-- directly. No policies are needed — RLS with no policies denies all
+-- PostgREST access, which is the correct behaviour.
+ALTER TABLE merchants          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payments           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_events     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_logs         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sessions           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_keys           ENABLE ROW LEVEL SECURITY;
+-- auth_challenges RLS is enabled immediately after its CREATE TABLE above.

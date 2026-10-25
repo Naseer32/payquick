@@ -54,3 +54,18 @@ BEGIN
       CHECK (status IN ('pending', 'confirmed', 'failed'));
   END IF;
 END $$;
+
+-- ── Row Level Security ───────────────────────────────────────────────────────
+-- Blocks Supabase PostgREST (anon/authenticated keys) from accessing any table
+-- directly. The API uses DATABASE_URL (direct Postgres) and is unaffected.
+-- ALTER TABLE ... ENABLE ROW LEVEL SECURITY is idempotent — safe to re-run.
+ALTER TABLE merchants          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payments           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_events     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_logs         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sessions           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_keys           ENABLE ROW LEVEL SECURITY;
+-- auth_challenges already has RLS enabled (applied in the CREATE TABLE block above).
