@@ -9,7 +9,7 @@ const ARC_TESTNET_CONFIG = {
     symbol: "USDC",
     decimals: 6
   },
-  rpcUrls: ["https://rpc.testnet.arc.network"],
+  rpcUrls: ["https://rpc.testnet.arc.io"],
   blockExplorerUrls: ["https://testnet.arcscan.app"]
 };
 
