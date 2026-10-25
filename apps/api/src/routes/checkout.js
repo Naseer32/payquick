@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { query } from "../db/database.js";
+import { arcRpc } from "../services/arcRpc.js";
 
 const router = Router();
 
@@ -301,24 +302,16 @@ router.post("/:token/verify", async (req, res) => {
       });
     }
 
-    const rpcResponse = await fetch(
-      "https://rpc.testnet.arc.io",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "eth_getTransactionReceipt",
-          params: [payment.tx_hash]
-        })
-      }
-    );
+    let receipt;
 
-    const rpcData = await rpcResponse.json();
-    const receipt = rpcData.result;
+    try {
+      receipt = await arcRpc("eth_getTransactionReceipt", [payment.tx_hash]);
+    } catch (rpcError) {
+      return res.status(503).json({
+        ok: false,
+        error: "Could not reach the Arc network. Please try again shortly."
+      });
+    }
 
     if (!receipt) {
       return res.json({
