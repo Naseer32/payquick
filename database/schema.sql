@@ -123,6 +123,11 @@ CREATE TABLE auth_challenges (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Prevent PostgREST (Supabase anon/authenticated keys) from accessing this
+-- security-sensitive table directly. The API uses DATABASE_URL (direct Postgres)
+-- and is unaffected by RLS.
+ALTER TABLE auth_challenges ENABLE ROW LEVEL SECURITY;
+
 -- ── API keys ────────────────────────────────────────────────────────────────
 
 CREATE TABLE api_keys (

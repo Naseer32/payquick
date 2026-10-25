@@ -10,6 +10,12 @@ CREATE TABLE IF NOT EXISTS auth_challenges (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- RLS must be enabled on auth_challenges because Supabase exposes tables via
+-- PostgREST. Without RLS, any anon/authenticated key could read or write
+-- challenge rows directly. The backend API connects via DATABASE_URL (direct
+-- Postgres), not PostgREST, so RLS does not affect API behaviour.
+ALTER TABLE auth_challenges ENABLE ROW LEVEL SECURITY;
+
 -- ── Missing indexes ──────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS customers_merchant_id_idx      ON customers(merchant_id);
 CREATE INDEX IF NOT EXISTS invoices_merchant_id_idx       ON invoices(merchant_id);
