@@ -137,7 +137,15 @@ export default function Checkout({ checkoutToken, darkMode = false }) {
         setCheckout((prev) => ({ ...prev, status: "expired" }));
       }
     } catch (err) {
-      setVerifyError(friendlyError(err));
+      // A 5xx or a bare "fetch failed" means the PayQuick server couldn't reach the network
+      // to confirm it. The payment itself is already on Arc, so say that plainly.
+      const serverSide = err?.status >= 500 || /^fetch failed$/i.test(String(err?.message));
+
+      setVerifyError(
+        serverSide
+          ? "PayQuick couldn't confirm your payment with the network just now. Your payment is already on Arc. This page will keep trying, so please don't pay again."
+          : friendlyError(err)
+      );
     } finally {
       setChecking(false);
     }
