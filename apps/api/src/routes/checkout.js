@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../db/database.js";
 import { arcRpc } from "../services/arcRpc.js";
+import { validatePaymentReceipt } from "../services/paymentCheck.js";
 
 const router = Router();
 
@@ -61,9 +62,10 @@ router.get("/:token", async (req, res) => {
       checkout
     });
   } catch (error) {
-    res.status(400).json({
+    console.error("Checkout error:", error);
+    res.status(500).json({
       ok: false,
-      error: error.message
+      error: "Something went wrong. Please try again."
     });
   }
 });
@@ -76,6 +78,16 @@ router.post("/:token/pay", async (req, res) => {
       return res.status(400).json({
         ok: false,
         error: "txHash and payerAddress are required"
+      });
+    }
+
+    if (
+      !/^0x[0-9a-fA-F]{64}$/.test(String(txHash)) ||
+      !/^0x[0-9a-fA-F]{40}$/.test(String(payerAddress))
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "txHash or payerAddress is not a valid value"
       });
     }
 
@@ -134,6 +146,22 @@ router.post("/:token/pay", async (req, res) => {
           invoice.status === "expired"
             ? "Invoice has expired"
             : "Invoice is not pending"
+      });
+    }
+
+    const duplicate = await query(
+      `SELECT id, invoice_id FROM payments WHERE lower(tx_hash) = lower($1) LIMIT 1`,
+      [txHash]
+    );
+
+    if (duplicate.rows.length > 0) {
+      if (duplicate.rows[0].invoice_id === invoice.id) {
+        return res.json({ ok: true, paymentId: duplicate.rows[0].id });
+      }
+
+      return res.status(409).json({
+        ok: false,
+        error: "This transaction has already been used for another payment"
       });
     }
 
@@ -204,9 +232,10 @@ router.post("/:token/pay", async (req, res) => {
       paymentId: paymentResult.rows[0].id
     });
   } catch (error) {
-    res.status(400).json({
+    console.error("Checkout error:", error);
+    res.status(500).json({
       ok: false,
-      error: error.message
+      error: "Something went wrong. Please try again."
     });
   }
 });
@@ -217,6 +246,7 @@ router.post("/:token/verify", async (req, res) => {
       `
         SELECT
           i.id,
+          i.invoice_number,
           i.status,
           i.due_at
         FROM invoices i
@@ -275,6 +305,7 @@ router.post("/:token/verify", async (req, res) => {
         SELECT
           id,
           tx_hash,
+          receiver_address,
           status,
           amount,
           currency
@@ -335,6 +366,25 @@ router.post("/:token/verify", async (req, res) => {
       });
     }
 
+    const check = validatePaymentReceipt(receipt, {
+      receiver: payment.receiver_address,
+      amount: payment.amount,
+      invoiceNumber: invoice.invoice_number
+    });
+
+    if (!check.ok) {
+      await query(
+        `UPDATE payments SET status = 'failed' WHERE id = $1`,
+        [payment.id]
+      );
+
+      return res.json({
+        ok: true,
+        status: "failed",
+        message: check.reason
+      });
+    }
+
     const blockNumber = parseInt(receipt.blockNumber, 16);
 
     await query(
@@ -389,7 +439,7 @@ router.post("/:token/verify", async (req, res) => {
       `,
       [
         invoice.id,
-        `Payment of ${Number(payment.amount)} ${payment.currency} has been confirmed.`
+        `Payment of ${Number(payment.amount)} ${payment.currency} for invoice ${invoice.invoice_number} has been confirmed.`
       ]
     );
 
@@ -427,9 +477,10 @@ router.post("/:token/verify", async (req, res) => {
       status: "confirmed"
     });
   } catch (error) {
-    res.status(400).json({
+    console.error("Checkout error:", error);
+    res.status(500).json({
       ok: false,
-      error: error.message
+      error: "Something went wrong. Please try again."
     });
   }
 });
