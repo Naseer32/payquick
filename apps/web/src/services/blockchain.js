@@ -7,9 +7,9 @@ const ARC_TESTNET_CONFIG = {
   nativeCurrency: {
     name: "USDC",
     symbol: "USDC",
-    decimals: 6
+    decimals: 18
   },
-  rpcUrls: ["https://rpc.testnet.arc.network"],
+  rpcUrls: ["https://rpc.testnet.arc.io"],
   blockExplorerUrls: ["https://testnet.arcscan.app"]
 };
 

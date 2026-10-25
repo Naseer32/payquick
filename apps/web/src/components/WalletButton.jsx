@@ -1,61 +1,50 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   authenticateWallet,
   restoreSession,
   logout
 } from "../services/auth.js";
+import {
+  ThemeScope,
+  Button,
+  CopyButton,
+  shortAddress,
+  addressUrl,
+  friendlyError
+} from "./ui.jsx";
 
-export default function WalletButton({ onAuthenticated, isMobile = false }) {
+export default function WalletButton({
+  onAuthenticated,
+  isMobile = false,
+  darkMode = false
+}) {
   const [account, setAccount] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
 
   useEffect(() => {
     let mounted = true;
 
     async function restore() {
-      const token = localStorage.getItem(
-        "payquick_session"
-      );
-
-      if (!token) {
+      if (!localStorage.getItem("payquick_session")) {
         return;
       }
 
       setLoading(true);
-      setError("");
 
       try {
-        console.log(
-          "PayQuick: restoring existing session"
-        );
-
         const result = await restoreSession();
 
-        if (!mounted) return;
+        if (!mounted || !result) return;
 
-        if (result) {
-          setAccount(result.walletAddress);
-
-          onAuthenticated?.(
-            result.merchant
-          );
-
-          console.log(
-            "PayQuick: session restored"
-          );
-        }
+        setAccount(result.walletAddress);
+        onAuthenticated?.(result.merchant);
       } catch (err) {
-        if (!mounted) return;
-
-        setError(
-          err.message ||
-            "Unable to restore wallet session."
-        );
+        if (mounted) setError(friendlyError(err));
       } finally {
-        if (mounted) {
-          setLoading(false);
-        }
+        if (mounted) setLoading(false);
       }
     }
 
@@ -66,26 +55,43 @@ export default function WalletButton({ onAuthenticated, isMobile = false }) {
     };
   }, [onAuthenticated]);
 
+  useEffect(() => {
+    if (!open && !error) return;
+
+    function onPointerDown(event) {
+      if (rootRef.current && !rootRef.current.contains(event.target)) {
+        setOpen(false);
+        setError("");
+      }
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setError("");
+      }
+    }
+
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, error]);
+
   async function handleConnect() {
     setError("");
     setLoading(true);
 
     try {
-      const result =
-        await authenticateWallet();
+      const result = await authenticateWallet();
 
-      setAccount(
-        result.walletAddress
-      );
-
-      onAuthenticated?.(
-        result.merchant
-      );
+      setAccount(result.walletAddress);
+      onAuthenticated?.(result.merchant);
     } catch (err) {
-      setError(
-        err.message ||
-          "Unable to authenticate wallet"
-      );
+      setError(friendlyError(err));
     } finally {
       setLoading(false);
     }
@@ -94,77 +100,81 @@ export default function WalletButton({ onAuthenticated, isMobile = false }) {
   function handleLogout() {
     logout();
     setAccount("");
+    setOpen(false);
+    onAuthenticated?.(null);
   }
 
-  const buttonFontSize = isMobile ? "11px" : "13px";
-  const buttonPadding = isMobile ? "8px 10px" : "10px 16px";
-
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: isMobile ? "column" : "row",
-        alignItems: isMobile ? "flex-end" : "center",
-        gap: isMobile ? "6px" : "8px"
-      }}
-    >
-      <button
-        type="button"
-        onClick={account ? handleLogout : handleConnect}
-        disabled={loading}
-        style={{
-          border: "1px solid #2563eb",
-          background: loading ? "#93c5fd" : "#2563eb",
-          color: "#ffffff",
-          borderRadius: "10px",
-          padding: buttonPadding,
-          cursor: loading ? "not-allowed" : "pointer",
-          fontSize: buttonFontSize,
-          fontWeight: "700",
-          whiteSpace: "nowrap"
-        }}
-      >
-        {loading
-          ? "Checking..."
-          : account
-            ? `${account.slice(0, 6)}...${account.slice(-4)}`
-            : "Connect Wallet"}
-      </button>
+    <ThemeScope dark={darkMode} bare>
+      <div className="pq-wallet" ref={rootRef}>
+        {account ? (
+          <button
+            type="button"
+            className="pq-chip"
+            aria-haspopup="menu"
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <i aria-hidden="true" />
+            <span className="pq-num">{shortAddress(account)}</span>
+          </button>
+        ) : (
+          <Button size="sm" loading={loading} onClick={handleConnect}>
+            {loading ? "Connecting…" : isMobile ? "Connect" : "Connect wallet"}
+          </Button>
+        )}
 
-      {account && !loading && (
-        <button
-          type="button"
-          onClick={handleLogout}
-          style={{
-            border: "1px solid #cbd5e1",
-            background: "#ffffff",
-            color: "#334155",
-            borderRadius: "10px",
-            padding: buttonPadding,
-            cursor: "pointer",
-            fontSize: buttonFontSize,
-            fontWeight: "600",
-            whiteSpace: "nowrap"
-          }}
-        >
-          Disconnect
-        </button>
-      )}
+        {open && account && (
+          <div className="pq-pop">
+            <div className="pq-menu" role="menu">
+              <div style={{ padding: "6px 10px 8px" }}>
+                <div style={{ fontSize: 12, color: "var(--pq-muted)" }}>
+                  Connected to Arc Testnet
+                </div>
+                <div
+                  className="pq-num"
+                  style={{ fontSize: 13, overflowWrap: "anywhere", marginTop: 2 }}
+                >
+                  {account}
+                </div>
+              </div>
 
-      {error && (
-        <p
-          role="alert"
-          style={{
-            margin: 0,
-            fontSize: "10px",
-            color: "#dc2626",
-            maxWidth: "140px",
-            textAlign: "right"
-          }}
-        >
-          {error}
-        </p>
-      )}
-    </div>
+              <div style={{ padding: "0 4px 6px" }}>
+                <CopyButton value={account} label="Copy address" block />
+              </div>
+
+              <a
+                role="menuitem"
+                href={addressUrl(account)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View on Arcscan
+              </a>
+
+              <button
+                type="button"
+                role="menuitem"
+                className="pq-danger"
+                onClick={handleLogout}
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
+        )}
+
+        {error && !open && (
+          <div className="pq-pop" role="alert">
+            <p style={{ margin: "6px 8px 10px", color: "var(--pq-danger)", lineHeight: 1.45 }}>
+              {error}
+            </p>
+            <Button variant="secondary" size="sm" block onClick={handleConnect} loading={loading}>
+              Try again
+            </Button>
+          </div>
+        )}
+      </div>
+    </ThemeScope>
   );
 }
