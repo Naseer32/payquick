@@ -1,3 +1,13 @@
+/**
+ * api.js
+ *
+ * HTTP client for the PayQuick API.
+ *
+ * Merges remote improvements (AbortController timeout, 204 handling, cleaner
+ * error messages) with audit fix (removed production debug console.log calls
+ * that were leaking API URLs and wallet addresses to the browser console).
+ */
+
 const API_URL = (
   import.meta.env.VITE_API_URL || "https://payquick-v2.onrender.com"
 ).trim();
@@ -29,7 +39,6 @@ export async function apiRequest(path, options = {}) {
           "The server took too long to respond. It may be waking up, so try again in a few seconds."
         );
       }
-
       throw new Error(
         "Can't reach the PayQuick server. Check your connection and try again."
       );
@@ -37,14 +46,14 @@ export async function apiRequest(path, options = {}) {
 
     if (!response.ok) {
       const body = await response.json().catch(() => null);
-      const error = new Error(
+      const err = new Error(
         body?.error ||
           body?.detail?.message ||
           body?.detail?.code ||
           `Request failed (${response.status})`
       );
-      error.status = response.status;
-      throw error;
+      err.status = response.status;
+      throw err;
     }
 
     if (response.status === 204) {
@@ -59,10 +68,7 @@ export async function apiRequest(path, options = {}) {
 }
 
 export function saveSession(token) {
-  if (!token) {
-    return;
-  }
-
+  if (!token) return;
   localStorage.setItem("payquick_session", token);
 }
 

@@ -17,8 +17,9 @@ const TRACKER_ADDRESS = (
 const PAYMENT_EVENT_TOPIC =
   "0x3850c91f104feb2bf70644e43b04de7b6368673d810ad84a914bfc9aefb270ea";
 
-// Arc's native USDC uses 18 decimals for transaction values.
-const DECIMALS = 18;
+// Arc's native USDC uses 6 decimals (not 18).
+// Using 18 would make every amount comparison fail — a 10^12 mismatch on every payment.
+const DECIMALS = 6;
 const WORD = 64;
 
 export function toBaseUnits(value) {

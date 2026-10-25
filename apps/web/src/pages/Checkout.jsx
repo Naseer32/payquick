@@ -19,8 +19,9 @@ const PAYMENT_TRACKER_ABI = [
   "function sendPayment(address to, string memo) external payable"
 ];
 
-// Arc's native USDC uses 18 decimals for transaction values (same as the existing flow).
-const NATIVE_DECIMALS = 18;
+// Arc's native USDC uses 6 decimals (not 18). Using 18 causes a 10^12 overflow on every
+// payment — a critical financial error. The correct value is 6.
+const NATIVE_DECIMALS = 6;
 
 const storageKey = (token) => `payquick_tx_${token}`;
 
