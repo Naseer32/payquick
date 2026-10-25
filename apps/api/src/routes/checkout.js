@@ -302,7 +302,7 @@ router.post("/:token/verify", async (req, res) => {
     }
 
     const rpcResponse = await fetch(
-      "https://rpc.testnet.arc.network",
+      "https://rpc.testnet.arc.io",
       {
         method: "POST",
         headers: {
