@@ -63,7 +63,7 @@ export const ACTIVE_RPC_URL = IS_MAINNET ? ARC_MAINNET_RPC_URL : ARC_TESTNET_RPC
 export const PAYMENT_TRACKER_ADDRESS_TESTNET =
   process.env.PAYMENT_TRACKER_ADDRESS_TESTNET ||
   process.env.PAYMENT_TRACKER_ADDRESS || // legacy fallback
-  null;
+  "0x5224d8fbf1069d32bcf2778e6c8a52558a52d502"; // arc-studio-allow-onchain-literal — deployed 2026-10-30, Arc Testnet
 
 /**
  * PaymentTracker contract address on Arc Mainnet.

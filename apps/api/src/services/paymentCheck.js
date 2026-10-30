@@ -4,13 +4,12 @@
 // much, and the memo (which ends with "[<invoice number>]"). Reading that event, instead of
 // only checking that the transaction succeeded, stops someone from submitting an unrelated
 // successful transaction as proof of payment.
-//
-// PAYMENT_TRACKER_ADDRESS (optional env var) overrides the contract address if it is ever
-// redeployed.
 
-const TRACKER_ADDRESS = (
-  process.env.PAYMENT_TRACKER_ADDRESS || "0xd0c5f3e9570cca0e9913522905b164304a692166"
-).toLowerCase();
+import { ACTIVE_PAYMENT_TRACKER_ADDRESS } from "../constants.js";
+
+const TRACKER_ADDRESS = ACTIVE_PAYMENT_TRACKER_ADDRESS
+  ? ACTIVE_PAYMENT_TRACKER_ADDRESS.toLowerCase()
+  : null;
 
 // Topic 0 of the payment event. Topics: payment id, sender, recipient.
 // Data: amount, memo offset, timestamp, memo.

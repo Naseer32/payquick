@@ -1,0 +1,113 @@
+{
+  "contractAddress": "0x5224d8fbf1069d32bcf2778e6c8a52558a52d502",
+  "network": "ARC-TESTNET",
+  "contract_network_and_links": {
+    "Arc Testnet": "https://explorer.testnet.arc.io/address/0x5224d8fbf1069d32bcf2778e6c8a52558a52d502"
+  },
+  "contract_deployments": [
+    {
+      "chain": "Arc Testnet",
+      "address": "0x5224d8fbf1069d32bcf2778e6c8a52558a52d502",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x5224d8fbf1069d32bcf2778e6c8a52558a52d502",
+      "txHash": "0x66da397d56e6587930ae3574fc95e31cb128ebda174983299f47a430c23705af",
+      "deployedAt": "2026-10-30T07:55:27.445Z"
+    }
+  ],
+  "abi": [
+    {
+      "type": "receive",
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "sendPayment",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "memo",
+          "type": "string",
+          "internalType": "string"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "event",
+      "name": "PaymentSent",
+      "inputs": [
+        {
+          "name": "paymentId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "sender",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "recipient",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "memo",
+          "type": "string",
+          "indexed": false,
+          "internalType": "string"
+        },
+        {
+          "name": "timestamp",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "error",
+      "name": "DirectPaymentsNotSupported",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ForwardFailed",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ReentrancyGuardReentrantCall",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "SelfPaymentNotAllowed",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ZeroAmount",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ZeroRecipient",
+      "inputs": []
+    }
+  ]
+}
