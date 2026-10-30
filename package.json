@@ -1,5 +1,5 @@
 {
-  "name": "payquick-v2",
+  "name": "payquick",
   "private": true,
   "version": "0.1.0",
   "workspaces": ["apps/web", "apps/api", "packages/shared"],

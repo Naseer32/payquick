@@ -9,7 +9,7 @@
  */
 
 const API_URL = (
-  import.meta.env.VITE_API_URL || "https://payquick-v2.onrender.com"
+  import.meta.env.VITE_API_URL || "https://payquick.onrender.com"
 ).trim();
 
 // Render free instances can take a while to wake up, so the timeout is generous.

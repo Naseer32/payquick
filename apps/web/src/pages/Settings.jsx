@@ -584,7 +584,7 @@ export default function Settings({ merchant, darkMode = false, setDarkMode }) {
         </dl>
 
         <p className="pq-item-meta" style={{ margin: "14px 0 0", lineHeight: 1.5 }}>
-          Test USDC has no real-world value. PayQuick runs on Arc Testnet only for now.
+          PayQuick settles payments on the network configured at deployment time.
         </p>
       </section>
     </PageScope>

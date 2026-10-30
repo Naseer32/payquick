@@ -1,37 +1,52 @@
 /**
  * blockchain.js
  *
- * Browser-side blockchain helpers.
+ * Browser-side blockchain helpers. Network is driven by VITE_ARC_NETWORK
+ * ("testnet" or "mainnet"), set at build time. Falls back to "testnet".
  *
  * Arc native USDC decimal note:
- *  - eth_getBalance (used by getNativeBalance) returns values in 18-decimal
- *    wei format, identical to Ethereum. Divide by 10^18 to get a human-readable
- *    USDC amount. Confirmed empirically: a ~1220 USDC wallet returns
- *    0x423087730cf559f000 (≈1.22e21), which divided by 1e18 = 1220.98 USDC.
- *  - ERC-20 balanceOf (not used here) uses 6 decimals.
- *  - parseUnits for sendTransaction value must also use 18 to match what the
- *    RPC expects in the `value` field.
- *  - wallet_addEthereumChain nativeCurrency.decimals must be 18 so MetaMask
- *    displays the correct human-readable amount.
+ *  - eth_getBalance returns 18-decimal wei (same as Ethereum).
+ *    Confirmed empirically: a wallet with ~1220 USDC returns 0x423087730cf559f000;
+ *    divided by 1e18 = 1220.98 USDC.
+ *  - ERC-20 balanceOf uses 6 decimals (not used here).
+ *  - tx `value` and parseUnits must use 18 to match eth_getBalance.
+ *  - wallet_addEthereumChain nativeCurrency.decimals = 18 so wallets display
+ *    the correct human-readable amount.
  */
 
-const ARC_TESTNET_CHAIN_ID = 5042002;
-const ARC_TESTNET_CHAIN_ID_HEX = "0x4cef52";
+const ARC_NETWORK = (import.meta.env.VITE_ARC_NETWORK || "testnet").trim().toLowerCase();
+const IS_MAINNET = ARC_NETWORK === "mainnet";
 
-// eth_getBalance and tx `value` field use 18-decimal wei on Arc Testnet.
+// Chain IDs
+const ARC_TESTNET_CHAIN_ID     = 5042002;
+const ARC_TESTNET_CHAIN_ID_HEX = "0x4cef52";
+const ARC_MAINNET_CHAIN_ID     = 5042;
+const ARC_MAINNET_CHAIN_ID_HEX = "0x13b2";
+
+export const ACTIVE_CHAIN_ID     = IS_MAINNET ? ARC_MAINNET_CHAIN_ID     : ARC_TESTNET_CHAIN_ID;
+export const ACTIVE_CHAIN_ID_HEX = IS_MAINNET ? ARC_MAINNET_CHAIN_ID_HEX : ARC_TESTNET_CHAIN_ID_HEX;
+export const ACTIVE_NETWORK_NAME = IS_MAINNET ? "Arc"                     : "Arc Testnet";
+
+// eth_getBalance and tx `value` field use 18-decimal wei on both Arc networks.
 const ARC_NATIVE_DECIMALS = 18;
 
-const ARC_TESTNET_CONFIG = {
+const ARC_TESTNET_CHAIN_CONFIG = {
   chainId: ARC_TESTNET_CHAIN_ID_HEX,
   chainName: "Arc Testnet",
-  nativeCurrency: {
-    name: "USDC",
-    symbol: "USDC",
-    decimals: ARC_NATIVE_DECIMALS
-  },
-  rpcUrls: ["https://rpc.testnet.arc.io"], // arc-studio-allow-onchain-literal
-  blockExplorerUrls: ["https://testnet.arcscan.app"]
+  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: ARC_NATIVE_DECIMALS },
+  rpcUrls: ["https://rpc.testnet.arc.io"],           // arc-studio-allow-onchain-literal
+  blockExplorerUrls: ["https://explorer.testnet.arc.io"]
 };
+
+const ARC_MAINNET_CHAIN_CONFIG = {
+  chainId: ARC_MAINNET_CHAIN_ID_HEX,
+  chainName: "Arc",
+  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: ARC_NATIVE_DECIMALS },
+  rpcUrls: ["https://rpc.mainnet.arc.io"],           // arc-studio-allow-onchain-literal
+  blockExplorerUrls: ["https://explorer.arc.io"]
+};
+
+const ACTIVE_CHAIN_CONFIG = IS_MAINNET ? ARC_MAINNET_CHAIN_CONFIG : ARC_TESTNET_CHAIN_CONFIG;
 
 export function getEthereumProvider() {
   if (typeof window === "undefined" || !window.ethereum) {
@@ -58,45 +73,57 @@ export async function getChainId() {
   return provider.request({ method: "eth_chainId" });
 }
 
-export function isArcTestnet(chainId) {
-  return Number.parseInt(chainId, 16) === ARC_TESTNET_CHAIN_ID;
+export function isActiveChain(chainId) {
+  return Number.parseInt(chainId, 16) === ACTIVE_CHAIN_ID;
 }
 
-export async function ensureArcTestnet() {
+/** @deprecated Use isActiveChain() — kept for compatibility */
+export function isArcTestnet(chainId) {
+  return isActiveChain(chainId);
+}
+
+export async function ensureArcNetwork() {
   const provider = getEthereumProvider();
 
   let chainId = await provider.request({ method: "eth_chainId" });
 
-  if (isArcTestnet(chainId)) return chainId;
+  if (isActiveChain(chainId)) return chainId;
 
   try {
     await provider.request({
       method: "wallet_switchEthereumChain",
-      params: [{ chainId: ARC_TESTNET_CHAIN_ID_HEX }]
+      params: [{ chainId: ACTIVE_CHAIN_ID_HEX }]
     });
   } catch (error) {
     if (error?.code !== 4902) {
-      throw new Error(error?.message || "Unable to switch wallet to Arc Testnet.");
+      throw new Error(
+        error?.message || `Unable to switch wallet to ${ACTIVE_NETWORK_NAME}.`
+      );
     }
 
     await provider.request({
       method: "wallet_addEthereumChain",
-      params: [ARC_TESTNET_CONFIG]
+      params: [ACTIVE_CHAIN_CONFIG]
     });
 
     await provider.request({
       method: "wallet_switchEthereumChain",
-      params: [{ chainId: ARC_TESTNET_CHAIN_ID_HEX }]
+      params: [{ chainId: ACTIVE_CHAIN_ID_HEX }]
     });
   }
 
   chainId = await provider.request({ method: "eth_chainId" });
 
-  if (!isArcTestnet(chainId)) {
-    throw new Error("Wallet could not be switched to Arc Testnet.");
+  if (!isActiveChain(chainId)) {
+    throw new Error(`Wallet could not be switched to ${ACTIVE_NETWORK_NAME}.`);
   }
 
   return chainId;
+}
+
+/** @deprecated Use ensureArcNetwork() — kept for compatibility */
+export async function ensureArcTestnet() {
+  return ensureArcNetwork();
 }
 
 export async function signMessage(message, walletAddress) {
@@ -124,7 +151,7 @@ export async function getNativeBalance(walletAddress) {
     params: [walletAddress, "latest"]
   });
 
-  // eth_getBalance returns 18-decimal wei on Arc Testnet (same as Ethereum).
+  // eth_getBalance returns 18-decimal wei on both Arc networks (same as Ethereum).
   const balanceRaw = BigInt(balanceHex);
   const divisor = BigInt(10) ** BigInt(ARC_NATIVE_DECIMALS);
   const whole = balanceRaw / divisor;
@@ -138,10 +165,10 @@ export async function sendNativeTransfer(fromAddress, toAddress, amount) {
   const provider = getEthereumProvider();
 
   if (!fromAddress) throw new Error("Sender wallet address is required.");
-  if (!toAddress) throw new Error("Recipient address is required.");
+  if (!toAddress)   throw new Error("Recipient address is required.");
   if (!amount || Number(amount) <= 0) throw new Error("Enter a valid amount to send.");
 
-  // tx `value` field uses 18-decimal wei on Arc Testnet, matching eth_getBalance.
+  // tx `value` uses 18-decimal wei, matching eth_getBalance on both Arc networks.
   const amountInBaseUnits = BigInt(Math.round(Number(amount) * 10 ** ARC_NATIVE_DECIMALS));
   const amountHex = "0x" + amountInBaseUnits.toString(16);
 
