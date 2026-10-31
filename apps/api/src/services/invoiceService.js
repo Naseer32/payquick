@@ -19,6 +19,15 @@ export async function createInvoice({
     throw new Error("Invoice number is required");
   }
 
+  // Enforce unique invoice number per merchant
+  const existing = await query(
+    `SELECT id FROM invoices WHERE merchant_id = $1 AND invoice_number = $2 LIMIT 1`,
+    [merchantId, invoiceNumber]
+  );
+  if (existing.rows.length > 0) {
+    throw new Error(`Invoice number ${invoiceNumber} already exists. Please use a different number.`);
+  }
+
   const numericAmount = Number(amount);
 
   if (!amount || Number.isNaN(numericAmount) || numericAmount <= 0) {

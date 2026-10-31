@@ -27,6 +27,7 @@ function bucket(status) {
 }
 
 function nextInvoiceNumber(invoices) {
+  const used = new Set();
   let max = 0;
   let width = 4;
 
@@ -34,12 +35,18 @@ function nextInvoiceNumber(invoices) {
     const match = /^INV-(\d+)$/i.exec(String(invoice.invoice_number || ""));
 
     if (match) {
-      max = Math.max(max, Number(match[1]));
+      const n = Number(match[1]);
+      used.add(n);
+      max = Math.max(max, n);
       width = Math.max(width, match[1].length);
     }
   }
 
-  return `INV-${String(max + 1).padStart(width, "0")}`;
+  // Find the next unused number above max so we never reuse one
+  let next = max + 1;
+  while (used.has(next)) next++;
+
+  return `INV-${String(next).padStart(width, "0")}`;
 }
 
 function formatDate(value) {
