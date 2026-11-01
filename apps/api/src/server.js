@@ -24,6 +24,10 @@ import notificationsRouter from "./routes/notifications.js";
 import apiKeysRouter from "./routes/apiKeys.js";
 
 const app = express();
+
+// Trust Render's reverse proxy so express-rate-limit reads the real client IP
+// from X-Forwarded-For instead of throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 4000;
 
 // ── CORS ────────────────────────────────────────────────────────────────────
