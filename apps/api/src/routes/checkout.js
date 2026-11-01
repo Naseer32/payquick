@@ -39,10 +39,15 @@ router.get("/:token", async (req, res) => {
           i.paid_at,
           i.created_at,
           m.display_name,
-          m.wallet_address
+          m.wallet_address,
+          p.payer_address,
+          p.tx_hash
         FROM invoices i
         JOIN merchants m
           ON m.id = i.merchant_id
+        LEFT JOIN payments p
+          ON p.invoice_id = i.id
+         AND p.status = 'confirmed'
         WHERE i.checkout_token = $1
         LIMIT 1
       `,

@@ -343,12 +343,12 @@ export default function Checkout({ checkoutToken, darkMode = false }) {
           <dd>{new Date(checkout.due_at).toLocaleString()}</dd>
         </div>
       )}
-      {tx?.payerAddress && (
+      {(tx?.payerAddress || checkout.payer_address) && (
         <div className="pq-row">
           <dt>Paid by</dt>
           <dd className="pq-num">
-            <a className="pq-link" href={addressUrl(tx.payerAddress)} target="_blank" rel="noopener noreferrer">
-              {shortAddress(tx.payerAddress)}
+            <a className="pq-link" href={addressUrl(tx?.payerAddress || checkout.payer_address)} target="_blank" rel="noopener noreferrer">
+              {shortAddress(tx?.payerAddress || checkout.payer_address)}
             </a>
           </dd>
         </div>
@@ -367,17 +367,17 @@ export default function Checkout({ checkoutToken, darkMode = false }) {
         <dt>Status</dt>
         <dd><StatusBadge status={checkout.status} /></dd>
       </div>
-      {tx?.txHash && (
+      {(tx?.txHash || checkout.tx_hash) && (
         <div className="pq-row">
           <dt>Transaction</dt>
           <dd>
             <a
               className="pq-link pq-num"
-              href={txUrl(tx.txHash)}
+              href={txUrl(tx?.txHash || checkout.tx_hash)}
               target="_blank"
               rel="noopener noreferrer"
             >
-              {shortAddress(tx.txHash)}
+              {shortAddress(tx?.txHash || checkout.tx_hash)}
             </a>
           </dd>
         </div>
