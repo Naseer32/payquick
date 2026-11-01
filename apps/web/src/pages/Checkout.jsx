@@ -63,9 +63,11 @@ function Shell({ darkMode, children }) {
           </b>
         </div>
         {children}
-        <p className="pq-note pq-noprint">
-          Arc Testnet: test USDC has no real-world value.
-        </p>
+        {_ARC_NETWORK !== "mainnet" && (
+          <p className="pq-note pq-noprint">
+            Arc Testnet: test USDC has no real-world value.
+          </p>
+        )}
       </div>
     </ThemeScope>
   );
