@@ -14,7 +14,10 @@ import {
   friendlyError
 } from "../components/ui.jsx";
 
-const PAYMENT_TRACKER_ADDRESS = "0xd0c5f3e9570CcA0E9913522905b164304A692166";
+const _ARC_NETWORK = (import.meta.env.VITE_ARC_NETWORK || "testnet").trim().toLowerCase();
+const PAYMENT_TRACKER_ADDRESS = _ARC_NETWORK === "mainnet"
+  ? "0xe9917809eEaDc1Cc7426bD8F0f4b7a68004C3fC5"   // Arc Mainnet // arc-studio-allow-onchain-literal
+  : "0xd0c5f3e9570CcA0E9913522905b164304A692166";    // Arc Testnet // arc-studio-allow-onchain-literal
 const PAYMENT_TRACKER_ABI = [
   "function sendPayment(address to, string memo) external payable"
 ];
