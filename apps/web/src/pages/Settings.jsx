@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ethers } from "ethers";
 import { apiRequest } from "../services/api.js";
-import { ensureArcTestnet, getNativeBalance } from "../services/blockchain.js";
+import { ensureArcTestnet, getNativeBalance, ACTIVE_NETWORK_NAME, IS_MAINNET } from "../services/blockchain.js";
 import {
   Button,
   Alert,
@@ -280,7 +280,7 @@ export default function Settings({ merchant, darkMode = false, setDarkMode }) {
       <section className="pq-panel">
         <h2 className="pq-h2" style={sectionTitle}>Withdraw funds</h2>
         <p className="pq-sub" style={{ marginBottom: 16 }}>
-          Send USDC from your merchant wallet to another address on Arc Testnet.
+          Send USDC from your merchant wallet to another address on {ACTIVE_NETWORK_NAME}.
         </p>
 
         {withdrawal && (
@@ -375,7 +375,7 @@ export default function Settings({ merchant, darkMode = false, setDarkMode }) {
               </div>
               <div>
                 <dt>Network</dt>
-                <dd>Arc Testnet</dd>
+                <dd>{ACTIVE_NETWORK_NAME}</dd>
               </div>
             </dl>
 
@@ -579,7 +579,7 @@ export default function Settings({ merchant, darkMode = false, setDarkMode }) {
           </div>
           <div>
             <dt>Network</dt>
-            <dd>Arc Testnet</dd>
+            <dd>{ACTIVE_NETWORK_NAME}</dd>
           </div>
         </dl>
 

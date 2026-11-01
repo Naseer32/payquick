@@ -21,6 +21,7 @@ const Payments = lazy(() => import("./pages/Payments.jsx"));
 const Settings = lazy(() => import("./pages/Settings.jsx"));
 import { ThemeScope } from "./components/ui.jsx";
 import { getTheme } from "./theme.js";
+import { ACTIVE_NETWORK_NAME, IS_MAINNET } from "./services/blockchain.js";
 
 const APP_PAGES = ["dashboard", "invoices", "customers", "payments", "settings"];
 
@@ -435,7 +436,7 @@ export default function App() {
         <header className="pq-top">
           <div className="pq-topleft">
             <span className="pq-mark pq-topmark" aria-hidden="true">P</span>
-            <span className="pq-net">Arc Testnet</span>
+            <span className="pq-net">{ACTIVE_NETWORK_NAME}</span>
           </div>
 
           <WalletButton

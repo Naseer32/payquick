@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ACTIVE_NETWORK_NAME } from "../services/blockchain.js";
 import {
   authenticateWallet,
   restoreSession,
@@ -129,7 +130,7 @@ export default function WalletButton({
             <div className="pq-menu" role="menu">
               <div style={{ padding: "6px 10px 8px" }}>
                 <div style={{ fontSize: 12, color: "var(--pq-muted)" }}>
-                  Connected to Arc Testnet
+                  Connected to {ACTIVE_NETWORK_NAME}
                 </div>
                 <div
                   className="pq-num"

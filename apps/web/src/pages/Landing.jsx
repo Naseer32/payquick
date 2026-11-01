@@ -1,4 +1,5 @@
 import { ThemeScope } from "../components/ui.jsx";
+import { ACTIVE_NETWORK_NAME, IS_MAINNET } from "../services/blockchain.js";
 
 const ICONS = {
   invoice: (
@@ -236,7 +237,7 @@ export default function Landing({
                   </button>
                 </div>
 
-                <p className="pq-l-note">Currently running on Arc Testnet. Test USDC has no real-world value.</p>
+                <p className="pq-l-note">{IS_MAINNET ? `Running on ${ACTIVE_NETWORK_NAME}. Real USDC payments.` : `Currently running on ${ACTIVE_NETWORK_NAME}. Test USDC has no real-world value.`}</p>
               </div>
 
               <div className="pq-l-sample">
