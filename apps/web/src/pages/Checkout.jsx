@@ -342,10 +342,24 @@ export default function Checkout({ checkoutToken, darkMode = false }) {
           <dd>{new Date(checkout.due_at).toLocaleString()}</dd>
         </div>
       )}
+      {tx?.payerAddress && (
+        <div className="pq-row">
+          <dt>Paid by</dt>
+          <dd className="pq-num">
+            <a className="pq-link" href={addressUrl(tx.payerAddress)} target="_blank" rel="noopener noreferrer">
+              {shortAddress(tx.payerAddress)}
+            </a>
+          </dd>
+        </div>
+      )}
       {checkout.wallet_address && (
         <div className="pq-row">
-          <dt>Merchant wallet</dt>
-          <dd className="pq-num">{shortAddress(checkout.wallet_address)}</dd>
+          <dt>Paid to</dt>
+          <dd className="pq-num">
+            <a className="pq-link" href={addressUrl(checkout.wallet_address)} target="_blank" rel="noopener noreferrer">
+              {shortAddress(checkout.wallet_address)}
+            </a>
+          </dd>
         </div>
       )}
       <div className="pq-row">
