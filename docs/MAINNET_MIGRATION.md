@@ -1,5 +1,17 @@
 # PayQuick — Mainnet Migration Guide
 
+## Deployed Mainnet Contracts
+
+| Contract | Address | Chain |
+|---|---|---|
+| PaymentTracker | `0xe9917809eEaDc1Cc7426bD8F0f4b7a68004C3fC5` | Arc Mainnet (5042) |
+
+Deployer: `0xd1332CD4492a90C102420fFBABC533998aa2a0Fb`
+Deploy tx: `0xe5f44c82987cd99d32cb5a80a0e5031a503337055fb0fa3cf745f99191fc0ae3`
+Deployed: 2026-11-01
+
+---
+
 This document covers everything required to move PayQuick from Arc Testnet to
 Arc Mainnet. Work through each section in order. Do not skip the pre-flight
 checklist — real funds are at stake once mainnet is live.
