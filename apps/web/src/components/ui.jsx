@@ -3,8 +3,8 @@ import { getTheme } from "../theme.js";
 import { IS_MAINNET } from "../services/blockchain.js";
 
 const EXPLORER = IS_MAINNET
-  ? "https://arcscan.app"
-  : "https://testnet.arcscan.app";
+  ? "https://explorer.arc.io"
+  : "https://explorer.testnet.arc.io";
 
 export const shortAddress = (a = "") =>
   a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "";

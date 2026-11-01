@@ -43,7 +43,7 @@ const ARC_MAINNET_CHAIN_CONFIG = {
   chainName: "Arc",
   nativeCurrency: { name: "USDC", symbol: "USDC", decimals: ARC_NATIVE_DECIMALS },
   rpcUrls: ["https://rpc.mainnet.arc.io"],           // arc-studio-allow-onchain-literal
-  blockExplorerUrls: ["https://arcscan.app"]
+  blockExplorerUrls: ["https://explorer.arc.io"]
 };
 
 const ACTIVE_CHAIN_CONFIG = IS_MAINNET ? ARC_MAINNET_CHAIN_CONFIG : ARC_TESTNET_CHAIN_CONFIG;
