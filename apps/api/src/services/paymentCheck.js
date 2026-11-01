@@ -16,9 +16,10 @@ const TRACKER_ADDRESS = ACTIVE_PAYMENT_TRACKER_ADDRESS
 const PAYMENT_EVENT_TOPIC =
   "0x3850c91f104feb2bf70644e43b04de7b6368673d810ad84a914bfc9aefb270ea";
 
-// Arc's native USDC uses 6 decimals (not 18).
-// Using 18 would make every amount comparison fail — a 10^12 mismatch on every payment.
-const DECIMALS = 6;
+// The PaymentTracker contract is called with msg.value (native Arc USDC).
+// Arc's eth_getBalance and msg.value use 18-decimal wei format (same as Ethereum).
+// The ERC-20 balanceOf view uses 6 decimals — but this is NOT an ERC-20 transfer.
+const DECIMALS = 18;
 const WORD = 64;
 
 export function toBaseUnits(value) {
