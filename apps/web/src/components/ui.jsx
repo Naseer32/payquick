@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { getTheme } from "../theme.js";
+import { IS_MAINNET } from "../services/blockchain.js";
 
-const EXPLORER = "https://testnet.arcscan.app";
+const EXPLORER = IS_MAINNET
+  ? "https://arcscan.app"
+  : "https://testnet.arcscan.app";
 
 export const shortAddress = (a = "") =>
   a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "";
