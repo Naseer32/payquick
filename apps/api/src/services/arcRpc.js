@@ -6,7 +6,10 @@
 // - HTTP errors and JSON-RPC errors count as failures and move on to the next node.
 //   A null result is a valid answer (for example, a receipt that isn't mined yet).
 
-const DEFAULT_RPC_URLS = ["https://rpc.testnet.arc.io"];
+// Default RPC is driven by ACTIVE_RPC_URL from constants so it switches with ARC_NETWORK.
+// arc-studio-allow-onchain-literal
+import { ACTIVE_RPC_URL } from "../constants.js";
+const DEFAULT_RPC_URLS = [ACTIVE_RPC_URL];
 const TIMEOUT_MS = 10000;
 
 function getRpcUrls() {
