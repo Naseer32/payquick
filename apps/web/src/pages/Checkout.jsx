@@ -11,6 +11,7 @@ import {
   formatAmount,
   shortAddress,
   txUrl,
+  addressUrl,
   friendlyError
 } from "../components/ui.jsx";
 
