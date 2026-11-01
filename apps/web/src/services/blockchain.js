@@ -15,7 +15,7 @@
  */
 
 const ARC_NETWORK = (import.meta.env.VITE_ARC_NETWORK || "testnet").trim().toLowerCase();
-const IS_MAINNET = ARC_NETWORK === "mainnet";
+export const IS_MAINNET = ARC_NETWORK === "mainnet";
 
 // Chain IDs
 const ARC_TESTNET_CHAIN_ID     = 5042002;
